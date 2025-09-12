@@ -1,0 +1,49 @@
+name: Static Code Analysis - Semgrep
+
+on:
+    workflow_call:
+
+jobs:
+    semgrep-scan:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                fetch-depth: 0
+
+            - name: Run Semgrep
+              run: |
+                echo "Running Semgrep scan..."
+                docker run --rm \
+                  -v "$(pwd):/src" \
+                  semgrep/semgrep:latest \
+                  semgrep scan --config=auto \
+                  --sarif-output=/src/semgrep-results.sarif \
+                  --json --output=/src/semgrep-results.json \
+                  --verbose || true
+
+            - name: Semgrep results
+              run: |
+                echo "Semgrep summary:"
+                sudo apt-get update -y
+                sudo apt-get install -y jq || true
+                if [ -f semgrep-results.json ]; then
+                   jq -r '
+                      .results[] |
+                      "[\(.check_id)] [\(.extra.severity)] \(.path):\(.start.line) - \(.extra.message)"
+                   ' semgrep-results.json || cat semgrep-results.json
+                else
+                    echo "No semgrep-results.json found"
+                fi
+            
+            - name: Upload results SARIf file
+              uses: github/codeql-action/upload-sarif@v3
+              with:
+                sarif_file: semgrep-results.sarif
+
+            - name: Upload JSON file
+              uses: actions/upload-artifact@v4
+              with:
+                name: semgrep-results
+                path: semgrep-results.json
