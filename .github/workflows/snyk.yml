@@ -1,0 +1,47 @@
+name: Static Code Analysis - Snyk
+
+on:
+    workflow_call:
+        secrets:
+            SNYK_TOKEN:
+                required: true
+
+permissions:
+    contents: read
+    security-events: write
+
+jobs:
+    snyk-scan:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                fetch-depth: 0
+            
+            - name: Run Snyk Open Source Scan
+              run: |
+                echo "Running Snyk scan..."
+                docker run --rm \
+                -e SNYK_TOKEN=${{ secrets.SNYK_TOKEN }} \
+                -v "$(pwd):/project" \
+                snyk/snyk:docker \
+                test --json > snyk-results.json || true
+
+            - name: Print Snyk results summary
+              run: |
+                echo "Snyk summary:"
+                if [ -f snyk-results.json ]; then
+                  jq -r '
+                    .valnerablities[] |
+                    "[\(.severity)] \(.title) in \(.packageName)@\(.version) (\(.from | join(" > ")))"
+                  ' snyk-results.json || cat snyk-results.json
+                else
+                  echo "No snyk-results.json found"
+                fi
+            
+            - name: Upload JSON file
+              uses: actions/upload-artifact@v4
+              with:
+                name: snyk-results
+                path: snyk-results.json

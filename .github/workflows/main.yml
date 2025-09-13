@@ -20,3 +20,9 @@ jobs:
   semgrep:
     name: Static Code Analysis - Semgrep
     uses: ./.github/workflows/semgrep.yml
+
+  snyk:
+    name: Static Code Security Analysis - Snyk
+    uses: ./.github/workflows/snyk.yml
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
