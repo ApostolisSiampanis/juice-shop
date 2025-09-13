@@ -24,7 +24,7 @@ jobs:
             - name: Wait for application to be healthy
               run: |
                 for i in {1..30}; do
-                  if curl --silent --fail http://localhost:3000 >/dev/null; then
+                  if docker compose exec -T juice-shop curl -s http://localhost:3000 >/dev/null 2>&1; then
                     echo "Application is up!"
                     break
                   fi
