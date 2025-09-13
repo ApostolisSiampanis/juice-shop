@@ -1,0 +1,115 @@
+name: TruffleHog Secrets Scan
+
+on:
+  # Allow this workflow to be called from another workflow
+  workflow_call:
+    inputs:
+      fail_on_any:
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
+        required: false
+        default: false
+        type: boolean
+      extra_args:
+        description: 'Extra flags to pass to trufflehog (optional)'
+        required: false
+        default: ''
+        type: string
+  # Permit manual execution for ad‑hoc scans
+  workflow_dispatch:
+    inputs:
+      fail_on_any:
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
+        required: false
+        default: 'false'
+      extra_args:
+        description: 'Extra flags to pass to trufflehog (optional)'
+        required: false
+        default: ''
+
+jobs:
+  trufflehog:
+    name: TruffleHog Secrets Scan
+    runs-on: ubuntu-latest
+    steps:
+      # Fetch the complete history so we can compare against any base commit
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Compute the first commit (root) of the currently checked‑out branch.
+      - name: Compute root commit
+        id: root
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT_SHA=$(git rev-list --max-parents=0 HEAD | head -n1)
+          echo "root_sha=${ROOT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull TruffleHog image
+        run: docker pull trufflesecurity/trufflehog:latest
+
+      - name: Set TruffleHog fail flag
+        id: flags
+        shell: bash
+        env:
+          FAIL_ON_ANY: ${{ inputs.fail_on_any || github.event.inputs.fail_on_any || false }}
+        run: |
+          set -euo pipefail
+          # If fail_on_any is true, pass --fail so any result (verified,
+          # unknown or unverified) will cause a non-zero exit code【714214277254825†L118-L125】.
+          # Otherwise leave the flag empty, allowing the scan to succeed even
+          # when secrets are detected.
+          if [[ "${FAIL_ON_ANY}" == "true" ]]; then
+            echo "fail_flag=--fail" >> "$GITHUB_OUTPUT"
+          else
+            echo "fail_flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: TruffleHog – git scan (full branch history)
+        shell: bash
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
+          FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
+          ROOT_SHA: ${{ steps.root.outputs.root_sha }}
+        run: |
+          set -euo pipefail
+          read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
+          docker run --rm \
+            -v "$PWD:/workdir" \
+            -w /workdir \
+            trufflesecurity/trufflehog:latest \
+              git \
+              file:///workdir \
+              --json \
+              ${FAIL_FLAG} \
+              --since-commit "${ROOT_SHA}" \
+              --branch HEAD \
+              "${EXTRA_ARR[@]:-}" | tee trufflehog_git.json
+
+      - name: TruffleHog – filesystem scan
+        shell: bash
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
+          FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
+        run: |
+          set -euo pipefail
+          read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
+          docker run --rm \
+            -v "$PWD:/workdir" \
+            -w /workdir \
+            trufflesecurity/trufflehog:latest \
+              filesystem \
+              /workdir \
+              --json \
+              ${FAIL_FLAG} \
+              "${EXTRA_ARR[@]:-}" | tee trufflehog_fs.json
+
+      - name: Upload TruffleHog results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trufflehog-results
+          path: |
+            trufflehog_git.json
+            trufflehog_fs.json
