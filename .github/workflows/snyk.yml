@@ -30,7 +30,7 @@ jobs:
                   -w /project \
                   -e SNYK_TOKEN="$SNYK_TOKEN" \
                   snyk/snyk:docker \
-                  snyk container test juice-shop --file=Dockerfile \
+                  snyk container test bkimminich/juice-shop:latest \
                   --json > snyk-results.json || true
 
             - name: Print Snyk results summary
