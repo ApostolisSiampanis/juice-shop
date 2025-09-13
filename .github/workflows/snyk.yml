@@ -31,7 +31,9 @@ jobs:
                   -e SNYK_TOKEN="$SNYK_TOKEN" \
                   snyk/snyk:docker \
                   snyk container test bkimminich/juice-shop:latest \
-                  --json > snyk-results.json || true
+                  --json-file-output=snyk-results.json \
+                  --sarif-file-output=snyk-results.sarif \
+                  || true
 
             - name: Print Snyk results summary
               run: |
@@ -45,8 +47,10 @@ jobs:
                   echo "No snyk-results.json found"
                 fi
             
-            - name: Upload JSON file
+            - name: Upload SARIF and JSON files
               uses: actions/upload-artifact@v4
               with:
                 name: snyk-results
-                path: snyk-results.json
+                path: |
+                  snyk-results.sarif
+                  snyk-results.json
