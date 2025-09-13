@@ -103,10 +103,10 @@ jobs:
             -e SONAR_HOST_URL \
             -e SONAR_TOKEN \
             -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
-            -e GITHUB_REF 
-            -e GITHUB_HEAD_REF 
-            -e GITHUB_BASE_REF 
-            -e GITHUB_REF_NAME 
+            -e GITHUB_REF \
+            -e GITHUB_HEAD_REF \
+            -e GITHUB_BASE_REF \
+            -e GITHUB_REF_NAME \
             -e GITHUB_ACTIONS=true \
             sonarsource/sonar-scanner-cli:latest
 
