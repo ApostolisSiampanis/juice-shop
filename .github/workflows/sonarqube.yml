@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -19,6 +19,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq
+          # SonarQube (Elasticsearch), change vm.max_map_count
           sudo sysctl -w vm.max_map_count=262144
 
       - name: Create Docker network
@@ -37,6 +38,7 @@ jobs:
             sonarqube:lts
 
           echo "Waiting for SonarQube to be UP..."
+          # Wait until you get status UP
           timeout=180
           elapsed=0
           until curl -sf http://localhost:9000/api/system/status | grep -q '"UP"'; do
@@ -58,24 +60,29 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_NUM: ${{ github.run_number }}
         run: |
-          ADMIN_NEW_PWD="admin$(openssl rand -base64 16 | tr -d '=+/[:space:]')"
+          # Change the default password
+          ADMIN_NEW_PWD="admin$(date +%s)"
           curl -sf -u admin:admin -X POST \
             "http://localhost:9000/api/users/change_password" \
-            -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" || true
+            -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" \
+            || true
 
+          # Create a admin token
           TOKEN_JSON=$(curl -sf -u "admin:${ADMIN_NEW_PWD}" -X POST \
             "http://localhost:9000/api/user_tokens/generate" \
             -d "name=gha-${RUN_ID}-${RUN_NUM}")
           SONAR_TOKEN=$(echo "$TOKEN_JSON" | jq -r '.token')
+
           if [ -z "$SONAR_TOKEN" ] || [ "$SONAR_TOKEN" = "null" ]; then
             echo "Failed to generate token" >&2
             exit 1
           fi
-          echo "::add-mask::${SONAR_TOKEN}"
 
+          # project keys generated from repo
           PROJECT_KEY="${GITHUB_REPO//\//:}"
           PROJECT_NAME="${GITHUB_REPO#*/}"
 
+          # Create project
           curl -sf -u "${SONAR_TOKEN}:" -X POST \
             "http://localhost:9000/api/projects/create" \
             -d "project=${PROJECT_KEY}" \
@@ -84,153 +91,25 @@ jobs:
           echo "token=${SONAR_TOKEN}" >> $GITHUB_OUTPUT
           echo "project_key=${PROJECT_KEY}" >> $GITHUB_OUTPUT
 
-      - name: Ensure workspace scanner dir
-        run: mkdir -p .scannerwork
-
-      - name: SonarScanner (Docker) with output
+      - name: SonarScanner (Docker)
         env:
           SONAR_HOST_URL: http://sonar-server:9000
           SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
           PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
         run: |
-          # Bind both potential working dirs to guarantee we capture report-task.txt
           docker run --rm \
             --network sonarnet \
             -v "$PWD:/usr/src" \
-            -v "$PWD/.scannerwork":/usr/src/.scannerwork \
-            -v "$PWD/.scannerwork":/tmp/.scannerwork \
             -e SONAR_HOST_URL \
             -e SONAR_TOKEN \
             -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
-            sonarsource/sonar-scanner-cli:latest | tee scanner.log
+            -e GITHUB_REF -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e GITHUB_REF_NAME -e GITHUB_ACTIONS=true \
+            sonarsource/sonar-scanner-cli:latest
 
-      - name: Wait CE completion & export ONE JSON
-        run: |
-          set -euo pipefail
-
-          PROJECT_KEY="${{ steps.bootstrap.outputs.project_key }}"
-          SONAR_TOKEN="${{ steps.bootstrap.outputs.token }}"
-          echo "::add-mask::${SONAR_TOKEN}"
-
-          SQ_HOST_EXT="http://localhost:9000"
-          REPORT_FILE=".scannerwork/report-task.txt"
-
-          CE_TASK_ID=""
-          if [ -f "$REPORT_FILE" ]; then
-            CE_TASK_ID=$(grep -oP '(?<=ceTaskId=).*' "$REPORT_FILE" || true)
-          fi
-
-          if [ -z "${CE_TASK_ID:-}" ] && [ -f scanner.log ]; then
-            CE_TASK_ID=$(grep -oE '/api/ce/task\\?id=([A-Za-z0-9_-]+)' scanner.log | tail -n1 | sed -E 's/.*id=//')
-          fi
-
-          if [ -z "${CE_TASK_ID:-}" ]; then
-            echo "report-task.txt and scanner.log did not yield a CE task id; falling back to CE activity API"
-            ACT=$(curl -sf -u "${SONAR_TOKEN}:" \
-              "${SQ_HOST_EXT}/api/ce/activity?component=${PROJECT_KEY}&ps=50")
-            CE_TASK_ID=$(echo "$ACT" | jq -r '.tasks | sort_by(.submittedAt) | last | .id // empty')
-          fi
-
-          if [ -z "${CE_TASK_ID:-}" ]; then
-            echo "Could not determine CE task id" >&2
-            exit 1
-          fi
-
-          echo "Waiting for Compute Engine task ${CE_TASK_ID}..."
-          while true; do
-            STATUS_JSON=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/ce/task?id=${CE_TASK_ID}")
-            STATUS=$(echo "$STATUS_JSON" | jq -r '.task.status')
-            if [ "$STATUS" = "SUCCESS" ]; then
-              break
-            elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELED" ]; then
-              echo "CE status: ${STATUS}" >&2
-              echo "$STATUS_JSON"
-              exit 1
-            else
-              sleep 3
-            fi
-          done
-
-          mkdir -p sonar-results tmp
-
-          # Core data
-          ce=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/ce/task?id=${CE_TASK_ID}")
-          qg=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
-          metrics="bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_hotspots,security_rating,reliability_rating,maintainability_rating,sqale_index,ncloc"
-          measures=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/measures/component?component=${PROJECT_KEY}&metricKeys=${metrics}")
-          component=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/components/show?component=${PROJECT_KEY}")
-
-          # Issues (paginate, ps=500)
-          FIRST_ISS=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/issues/search?componentKeys=${PROJECT_KEY}&ps=500&p=1")
-          echo "$FIRST_ISS" > tmp/issues-1.json
-          ITOTAL=$(echo "$FIRST_ISS" | jq -r '.paging.total // 0')
-          IPSIZE=$(echo "$FIRST_ISS" | jq -r '.paging.pageSize // 500')
-          IPAGES=$(( (ITOTAL + IPSIZE - 1) / IPSIZE ))
-          if [ "$IPAGES" -gt 1 ]; then
-            for p in $(seq 2 "$IPAGES"); do
-              curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/issues/search?componentKeys=${PROJECT_KEY}&ps=500&p=${p}" \
-                > "tmp/issues-${p}.json"
-            done
-          fi
-          issues=$(jq -s '{
-              paging: (.[0].paging),
-              issues:       ([ .[] | .issues[]? ]),
-              components:   ([ .[] | .components[]? ] | unique),
-              rules:        ([ .[] | .rules[]? ] | unique),
-              users:        ([ .[] | .users[]? ] | unique)
-            }' tmp/issues-*.json)
-
-          # Hotspots (paginate, ps=500)
-          FIRST_HS=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/hotspots/search?projectKey=${PROJECT_KEY}&ps=500&p=1")
-          echo "$FIRST_HS" > tmp/hotspots-1.json
-          HTOTAL=$(echo "$FIRST_HS" | jq -r '.paging.total // 0')
-          HPSIZE=$(echo "$FIRST_HS" | jq -r '.paging.pageSize // 500')
-          HPAGES=$(( (HTOTAL + HPSIZE - 1) / HPSIZE ))
-          if [ "$HPAGES" -gt 1 ]; then
-            for p in $(seq 2 "$HPAGES"); do
-              curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/hotspots/search?projectKey=${PROJECT_KEY}&ps=500&p=${p}" \
-                > "tmp/hotspots-${p}.json"
-            done
-          fi
-          hotspots=$(jq -s '{
-              paging: (.[0].paging),
-              hotspots:     ([ .[] | .hotspots[]? ]),
-              components:   ([ .[] | .components[]? ] | unique),
-              users:        ([ .[] | .users[]? ] | unique)
-            }' tmp/hotspots-*.json)
-
-          # Build the JSON file
-          jq -n \
-            --arg project_key "${PROJECT_KEY}" \
-            --arg generated_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-            --argjson ce "$ce" \
-            --argjson qg "$qg" \
-            --argjson measures "$measures" \
-            --argjson issues "$issues" \
-            --argjson hotspots "$hotspots" \
-            --argjson component "$component" \
-            '{
-              meta: { project_key: $project_key, generated_at: $generated_at },
-              ce_task: $ce,
-              quality_gate: $qg,
-              measures: $measures,
-              issues: $issues,
-              hotspots: $hotspots,
-              component: $component
-            }' > sonar-results/sonar-results.json
-
-          echo "Created sonar-results/sonar-results.json"
-          rm -rf tmp
-
-      - name: Upload SonarQube JSON artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sonarqube-results
-          path: sonar-results/sonar-results.json
-
-      - name: Cleanup
+      - name: Clean up
         if: always()
         run: |
+          docker logs sonar-server || true
           docker stop sonar-server || true
           docker rm sonar-server || true
           docker network rm sonarnet || true
