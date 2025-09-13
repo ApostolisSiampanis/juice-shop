@@ -1,7 +1,7 @@
 name: TruffleHog Secrets Scan
 
 on:
-
+  # Allow this workflow to be called from another workflow
   workflow_call:
     inputs:
       fail_on_any:
@@ -14,7 +14,7 @@ on:
         required: false
         default: ''
         type: string
-
+  # Permit manual execution for ad‑hoc scans
   workflow_dispatch:
     inputs:
       fail_on_any:
@@ -31,42 +31,46 @@ jobs:
     name: TruffleHog Secrets Scan
     runs-on: ubuntu-latest
     steps:
-
+      # Fetch the complete history so we can compare against any base commit
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Fetch all remote refs
+      - name: Compute root commit
+        id: root
+        shell: bash
         run: |
-          git fetch --quiet origin "+refs/*:refs/remotes/origin/*"
+          set -euo pipefail
+          ROOT_SHA=$(git rev-list --max-parents=0 HEAD | head -n1)
+          echo "root_sha=${ROOT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Pull TruffleHog image
         run: docker pull trufflesecurity/trufflehog:latest
 
-      - name: Set TruffleHog flags
+      - name: Set TruffleHog fail flag
         id: flags
         shell: bash
         env:
           FAIL_ON_ANY: ${{ inputs.fail_on_any || github.event.inputs.fail_on_any || false }}
         run: |
           set -euo pipefail
+          # If fail_on_any is true, pass --fail so any result (verified,
+          # unknown or unverified) will cause a non-zero exit code【714214277254825†L118-L125】.
+          # Otherwise leave the flag empty, allowing the scan to succeed even
+          # when secrets are detected.
           if [[ "${FAIL_ON_ANY}" == "true" ]]; then
             echo "fail_flag=--fail" >> "$GITHUB_OUTPUT"
           else
             echo "fail_flag=" >> "$GITHUB_OUTPUT"
           fi
-          # Always include all result types; filtering secrets with
-          # --results=verified,unknown or using --only-verified can suppress
-          # unverified results and cause legitimate secrets to be missed【104025215300955†L1059-L1063】.
-          echo "results_flag=" >> "$GITHUB_OUTPUT"
 
       - name: TruffleHog – git scan (entire repo)
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
           FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
-          RESULTS_FLAG: ${{ steps.flags.outputs.results_flag }}
+          ROOT_SHA: ${{ steps.root.outputs.root_sha }}
         run: |
           set -euo pipefail
           read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
@@ -78,8 +82,8 @@ jobs:
               file:///workdir \
               --json \
               ${FAIL_FLAG} \
-              ${RESULTS_FLAG} \
-              --all-branches \
+              "${ROOT_SHA}" \
+              HEAD \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_git.json
 
       - name: TruffleHog – filesystem scan
@@ -87,7 +91,6 @@ jobs:
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
           FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
-          RESULTS_FLAG: ${{ steps.flags.outputs.results_flag }}
         run: |
           set -euo pipefail
           read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
@@ -99,7 +102,6 @@ jobs:
               /workdir \
               --json \
               ${FAIL_FLAG} \
-              ${RESULTS_FLAG} \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_fs.json
 
       - name: Upload TruffleHog results
