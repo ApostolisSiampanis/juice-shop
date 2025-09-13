@@ -37,6 +37,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Compute the first commit (root) of the currently checked‑out branch.
       - name: Compute root commit
         id: root
         shell: bash
@@ -65,7 +66,7 @@ jobs:
             echo "fail_flag=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: TruffleHog – git scan (entire repo)
+      - name: TruffleHog – git scan (full branch history)
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
@@ -82,8 +83,8 @@ jobs:
               file:///workdir \
               --json \
               ${FAIL_FLAG} \
-              "${ROOT_SHA}" \
-              HEAD \
+              --since-commit "${ROOT_SHA}" \
+              --branch HEAD \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_git.json
 
       - name: TruffleHog – filesystem scan
