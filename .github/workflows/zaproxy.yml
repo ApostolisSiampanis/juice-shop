@@ -15,11 +15,22 @@ jobs:
             - name: Checkout code
               uses: actions/checkout@v4
 
-            #- name: Set up Docker buildx
-            #  uses: docker/setup-buildx-action@v3
-
             - name: Build the Docker Image
               run: docker build . -f Dockerfile -t juice-shop:latest
 
             - name: Start Application (Juice Shop)
               run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
+
+            - name: Run ZAP Baseline Scan
+              run: |
+                docker run --rm \
+                  -v $(pwd):/zap/wrk/:rw \
+                  --network="host" \
+                  -t owasp/zap2docker-stable:latest \
+                  zap-baseline.py -t http://localhost:3000 -r /zap/wrk/zap_report.html || true
+
+            - name: Upload HTML file
+              uses: actions/upload-artifact@v4
+              with:
+                name: zaproxy-results
+                path: zap_report.html
