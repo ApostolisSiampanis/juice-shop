@@ -86,6 +86,10 @@ jobs:
           echo "token=${SONAR_TOKEN}" >> $GITHUB_OUTPUT
           echo "project_key=${PROJECT_KEY}" >> $GITHUB_OUTPUT
 
+      # Ensure the metadata file directory exists in the mounted workspace
+      - name: Prepare .scannerwork dir
+        run: mkdir -p .scannerwork
+
       - name: SonarScanner (Docker)
         env:
           SONAR_HOST_URL: http://sonar-server:9000
@@ -97,7 +101,10 @@ jobs:
             -v "$PWD:/usr/src" \
             -e SONAR_HOST_URL \
             -e SONAR_TOKEN \
-            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
+            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} \
+                                    -Dsonar.sources=. \
+                                    -Dsonar.working.directory=/usr/src/.scannerwork \
+                                    -Dsonar.scanner.metadataFile=/usr/src/.scannerwork/report-task.txt" \
             sonarsource/sonar-scanner-cli:latest
 
       - name: Wait CE completion & export JSON
@@ -110,14 +117,22 @@ jobs:
           SQ_HOST_EXT="http://localhost:9000"
           REPORT_FILE=".scannerwork/report-task.txt"
 
-          if [ ! -f "$REPORT_FILE" ]; then
-            echo "Missing ${REPORT_FILE} — cannot track CE task." >&2
-            exit 1
+          # Primary: read ceTaskId from metadata file we forced into the workspace
+          CE_TASK_ID=""
+          if [ -f "$REPORT_FILE" ]; then
+            CE_TASK_ID=$(grep -oP '(?<=ceTaskId=).*' "$REPORT_FILE" || true)
           fi
 
-          CE_TASK_ID=$(grep -oP '(?<=ceTaskId=).*' "$REPORT_FILE" || true)
+          # Fallback: ask CE activity for the latest task on this project
           if [ -z "${CE_TASK_ID:-}" ]; then
-            echo "ceTaskId not found in report-task.txt" >&2
+            echo "report-task.txt missing or empty; falling back to CE activity API"
+            CE_TASK_ID=$(curl -sf -u "${SONAR_TOKEN}:" \
+              "${SQ_HOST_EXT}/api/ce/activity?component=${PROJECT_KEY}&ps=1" \
+              | jq -r '.tasks[0].id // empty')
+          fi
+
+          if [ -z "${CE_TASK_ID:-}" ]; then
+            echo "Could not determine CE task id" >&2
             exit 1
           fi
 
@@ -129,25 +144,65 @@ jobs:
               break
             elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELED" ]; then
               echo "CE status: ${STATUS}" >&2
+              echo "$STATUS_JSON"
               exit 1
             else
               sleep 3
             fi
           done
 
-          mkdir -p sonar-results
+          mkdir -p sonar-results tmp
 
-          # Collect all APIs
+          # Core data
           ce=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/ce/task?id=${CE_TASK_ID}")
           qg=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
           metrics="bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,security_hotspots,security_rating,reliability_rating,maintainability_rating,sqale_index,ncloc"
           measures=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/measures/component?component=${PROJECT_KEY}&metricKeys=${metrics}")
-          issues=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/issues/search?componentKeys=${PROJECT_KEY}&ps=500&p=1")
-          hotspots=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/hotspots/search?projectKey=${PROJECT_KEY}&ps=500")
           component=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/components/show?component=${PROJECT_KEY}")
 
-          # Merge into one JSON file
+          # Issues (paginate, ps=500)
+          FIRST_ISS=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/issues/search?componentKeys=${PROJECT_KEY}&ps=500&p=1")
+          echo "$FIRST_ISS" > tmp/issues-1.json
+          ITOTAL=$(echo "$FIRST_ISS" | jq -r '.paging.total // 0')
+          IPSIZE=$(echo "$FIRST_ISS" | jq -r '.paging.pageSize // 500')
+          IPAGES=$(( (ITOTAL + IPSIZE - 1) / IPSIZE ))
+          if [ "$IPAGES" -gt 1 ]; then
+            for p in $(seq 2 "$IPAGES"); do
+              curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/issues/search?componentKeys=${PROJECT_KEY}&ps=500&p=${p}" \
+                > "tmp/issues-${p}.json"
+            done
+          fi
+          issues=$(jq -s '{
+              paging: (.[0].paging),
+              issues:       ([ .[] | .issues[]? ]),
+              components:   ([ .[] | .components[]? ] | unique),
+              rules:        ([ .[] | .rules[]? ] | unique),
+              users:        ([ .[] | .users[]? ] | unique)
+            }' tmp/issues-*.json)
+
+          # Hotspots (paginate, ps=500)
+          FIRST_HS=$(curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/hotspots/search?projectKey=${PROJECT_KEY}&ps=500&p=1")
+          echo "$FIRST_HS" > tmp/hotspots-1.json
+          HTOTAL=$(echo "$FIRST_HS" | jq -r '.paging.total // 0')
+          HPSIZE=$(echo "$FIRST_HS" | jq -r '.paging.pageSize // 500')
+          HPAGES=$(( (HTOTAL + HPSIZE - 1) / HPSIZE ))
+          if [ "$HPAGES" -gt 1 ]; then
+            for p in $(seq 2 "$HPAGES"); do
+              curl -sf -u "${SONAR_TOKEN}:" "${SQ_HOST_EXT}/api/hotspots/search?projectKey=${PROJECT_KEY}&ps=500&p=${p}" \
+                > "tmp/hotspots-${p}.json"
+            done
+          fi
+          hotspots=$(jq -s '{
+              paging: (.[0].paging),
+              hotspots:     ([ .[] | .hotspots[]? ]),
+              components:   ([ .[] | .components[]? ] | unique),
+              users:        ([ .[] | .users[]? ] | unique)
+            }' tmp/hotspots-*.json)
+
+          # Build JSON file
           jq -n \
+            --arg project_key "${PROJECT_KEY}" \
+            --arg generated_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
             --argjson ce "$ce" \
             --argjson qg "$qg" \
             --argjson measures "$measures" \
@@ -155,6 +210,7 @@ jobs:
             --argjson hotspots "$hotspots" \
             --argjson component "$component" \
             '{
+              meta: { project_key: $project_key, generated_at: $generated_at },
               ce_task: $ce,
               quality_gate: $qg,
               measures: $measures,
@@ -164,6 +220,7 @@ jobs:
             }' > sonar-results/sonar-results.json
 
           echo "Created sonar-results/sonar-results.json"
+          rm -rf tmp
 
       - name: Upload SonarQube JSON artifact
         uses: actions/upload-artifact@v4
