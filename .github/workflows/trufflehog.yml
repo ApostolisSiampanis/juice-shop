@@ -1,0 +1,119 @@
+name: TruffleHog Secrets Analysis
+
+on:
+  # Allow this workflow to be called from another workflow
+  workflow_call:
+    inputs:
+      base_branch:
+        description: 'Base branch to compare against (defaults to main)'
+        required: false
+        default: 'main'
+        type: string
+      scan_depth:
+        description: 'Number of recent commits to scan (0 means full history)'
+        required: false
+        default: 50
+        type: number
+      fail_on_any:
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
+        required: false
+        default: false
+        type: boolean
+      extra_args:
+        description: 'Extra flags to pass to trufflehog (optional)'
+        required: false
+        default: ''
+        type: string
+  # Permit manual execution for ad‑hoc scans
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: 'Base branch to compare against (defaults to main)'
+        required: false
+        default: 'main'
+      scan_depth:
+        description: 'Number of recent commits to scan (0 means full history)'
+        required: false
+        default: 50
+      fail_on_any:
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
+        required: false
+        default: false
+      extra_args:
+        description: 'Extra flags to pass to trufflehog (optional)'
+        required: false
+        default: ''
+
+jobs:
+  trufflehog:
+    name: TruffleHog Secrets Scan
+    runs-on: ubuntu-latest
+    steps:
+      # Fetch the complete history so we can compare against any base commit
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Compute the base commit for scanning.  If scan_depth is greater than 0,
+      # we simply take HEAD~depth to limit scanning to the last N commits.  If
+      # the depth exceeds the commit count, fall back to the initial commit.
+      - name: Determine scan range
+        id: range
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Resolve input values (supports both workflow_call and dispatch)
+          BASE_BRANCH="${{ inputs.base_branch || github.event.inputs.base_branch || 'main' }}"
+          SCAN_DEPTH="${{ inputs.scan_depth || github.event.inputs.scan_depth || 50 }}"
+
+          if [[ "$SCAN_DEPTH" -eq 0 ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD | tail -n1)"
+          else
+            if git rev-parse "HEAD~${SCAN_DEPTH}" >/dev/null 2>&1; then
+              BASE_SHA="$(git rev-parse "HEAD~${SCAN_DEPTH}")"
+            else
+              BASE_SHA="$(git rev-list --max-parents=0 HEAD | tail -n1)"
+            fi
+          fi
+          echo "base_sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "depth=${SCAN_DEPTH}" >> "$GITHUB_OUTPUT"
+          echo "Base branch: $BASE_BRANCH, depth: $SCAN_DEPTH, base SHA: $BASE_SHA"
+
+      - name: Pull TruffleHog image
+        run: docker pull trufflesecurity/trufflehog:latest
+
+      - name: Run TruffleHog scan
+        shell: bash
+        env:
+          EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
+          FAIL_ON_ANY: ${{ inputs.fail_on_any || github.event.inputs.fail_on_any || false }}
+        run: |
+          set -euo pipefail
+          # Determine the appropriate fail flag
+          if [[ "$FAIL_ON_ANY" == "true" ]]; then
+            FAIL_FLAG="--fail"
+          else
+            FAIL_FLAG="--fail-verified"
+          fi
+          # Launch TruffleHog in a container.  Provide the base and head
+          # commits and mount the repository.  Write the results to a JSON
+          # file so they can be uploaded as an artifact.
+          docker run --rm \
+            -v "$PWD:/workdir" \
+            -w /workdir \
+            trufflesecurity/trufflehog:latest git \
+            "$FAIL_FLAG" \
+            --json \
+            ${{ steps.range.outputs.base_sha }} \
+            HEAD \
+            /workdir \
+            "$EXTRA_ARGS" \
+            | tee trufflehog_results.json
+
+      - name: Upload TruffleHog results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trufflehog-results
+          path: trufflehog_results.json
