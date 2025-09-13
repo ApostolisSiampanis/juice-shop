@@ -26,7 +26,7 @@ jobs:
                 docker run --rm \
                   -v $(pwd):/zap/wrk/:rw \
                   --network="host" \
-                  -t owasp/zap2docker-stable:latest \
+                  -t ghcr.io/zaproxy/zaproxy:stable \
                   zap-baseline.py -t http://localhost:3000 -r /zap/wrk/zap_report.html || true
 
             - name: Upload HTML file
