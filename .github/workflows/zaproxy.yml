@@ -32,7 +32,7 @@ jobs:
                   /zap/wrk/zap_report.json || true
 
             - name: Upload ZAP JSON Report
-              uses: actions/upload-artifact@v3
+              uses: actions/upload-artifact@v4
               with:
                 name: zap-report-json
                 path: zap_report.json
