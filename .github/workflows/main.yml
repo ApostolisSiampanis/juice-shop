@@ -30,7 +30,3 @@ jobs:
     uses: ./.github/workflows/snyk.yml
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-
-  zap-baseline:
-    name: ZAP Baseline Scan
-    uses: ./.github/workflows/zaproxy.yml
