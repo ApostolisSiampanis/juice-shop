@@ -23,7 +23,7 @@ jobs:
           sudo sysctl -w vm.max_map_count=262144
 
       - name: Create Docker network
-        run: docker network create sonarnet
+        run: docker network create sonarnet || true
 
       - name: Pull images
         run: |
@@ -67,7 +67,7 @@ jobs:
             -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" \
             || true
 
-          # Create a admin token
+          # Create an admin token
           TOKEN_JSON=$(curl -sf -u "admin:${ADMIN_NEW_PWD}" -X POST \
             "http://localhost:9000/api/user_tokens/generate" \
             -d "name=gha-${RUN_ID}-${RUN_NUM}")
@@ -82,7 +82,7 @@ jobs:
           PROJECT_KEY="${GITHUB_REPO//\//:}"
           PROJECT_NAME="${GITHUB_REPO#*/}"
 
-          # Create project
+          # Create project (ignore if exists)
           curl -sf -u "${SONAR_TOKEN}:" -X POST \
             "http://localhost:9000/api/projects/create" \
             -d "project=${PROJECT_KEY}" \
@@ -105,6 +105,89 @@ jobs:
             -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
             -e GITHUB_REF -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e GITHUB_REF_NAME -e GITHUB_ACTIONS=true \
             sonarsource/sonar-scanner-cli:latest
+
+      - name: Wait for CE task & export analysis JSON
+        env:
+          SONAR_HOST_API: http://localhost:9000
+          SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
+          PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
+        run: |
+          set -euo pipefail
+          mkdir -p sonar-json
+
+          # Locate and copy report-task.txt
+          REPORT_FILE=".scannerwork/report-task.txt"
+          if [ ! -f "$REPORT_FILE" ]; then
+            REPORT_FILE=$(find . -path "*/.scannerwork/report-task.txt" | head -n1 || true)
+          fi
+          if [ -z "${REPORT_FILE:-}" ] || [ ! -f "$REPORT_FILE" ]; then
+            echo "Cannot find report-task.txt" >&2
+            exit 1
+          fi
+          cp "$REPORT_FILE" sonar-json/report-task.txt
+
+          # Extract CE task id
+          CE_TASK_ID=$(awk -F= '/^ceTaskId=/{print $2}' "$REPORT_FILE")
+          if [ -z "$CE_TASK_ID" ]; then
+            echo "ceTaskId not found in report-task.txt" >&2
+            cat "$REPORT_FILE" || true
+            exit 1
+          fi
+
+          echo "Waiting for CE task $CE_TASK_ID to finish..."
+          for i in $(seq 1 60); do
+            TASK_JSON=$(curl -sf -u "${SONAR_TOKEN}:" "$SONAR_HOST_API/api/ce/task?id=$CE_TASK_ID")
+            echo "$TASK_JSON" > sonar-json/ce-task.json
+            STATUS=$(jq -r '.task.status' sonar-json/ce-task.json)
+            echo "  status=$STATUS"
+            if [ "$STATUS" = "SUCCESS" ]; then
+              break
+            elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELED" ]; then
+              echo "Compute Engine task finished with $STATUS" >&2
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # Paginated export of issues
+          PAGE=1
+          PAGE_SIZE=500
+          while :; do
+            RESP="sonar-json/issues_page_${PAGE}.json"
+            curl -sf -u "${SONAR_TOKEN}:" \
+              "$SONAR_HOST_API/api/issues/search?componentKeys=$PROJECT_KEY&ps=$PAGE_SIZE&p=$PAGE" > "$RESP"
+            COUNT=$(jq '.issues | length' "$RESP")
+            TOTAL=$(jq -r '.total' "$RESP")
+            echo "Fetched page $PAGE (count=$COUNT / total=$TOTAL)"
+            if [ $((PAGE * PAGE_SIZE)) -ge "${TOTAL:-0}" ] || [ "${COUNT:-0}" -eq 0 ]; then
+              break
+            fi
+            PAGE=$((PAGE+1))
+          done
+
+          # Measures summary
+          METRICS="bugs,vulnerabilities,security_hotspots,code_smells,coverage,duplicated_lines_density,sqale_index,reliability_rating,security_rating,maintainability_rating,ncloc"
+          curl -sf -u "${SONAR_TOKEN}:" \
+            "$SONAR_HOST_API/api/measures/component?component=$PROJECT_KEY&metricKeys=$METRICS" \
+            > sonar-json/measures.json
+
+          # Quality gate status
+          curl -sf -u "${SONAR_TOKEN}:" \
+            "$SONAR_HOST_API/api/qualitygates/project_status?projectKey=$PROJECT_KEY" \
+            > sonar-json/quality_gate.json
+
+          # Branches list
+          curl -sf -u "${SONAR_TOKEN}:" \
+            "$SONAR_HOST_API/api/project_branches/list?project=$PROJECT_KEY" \
+            > sonar-json/branches.json
+
+      - name: Upload Sonar JSON artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-json
+          path: sonar-json/**
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Clean up
         if: always()
