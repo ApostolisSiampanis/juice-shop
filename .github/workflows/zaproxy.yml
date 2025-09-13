@@ -27,10 +27,12 @@ jobs:
                   -v $(pwd):/zap/wrk/:rw \
                   --network="host" \
                   -t ghcr.io/zaproxy/zaproxy:stable \
-                  zap-baseline.py -t http://localhost:3000 -r /zap/wrk/zap_report.html || true
+                  zap-baseline.py \
+                  -t http://localhost:3000 -J \
+                  /zap/wrk/zap_report.json || true
 
-            - name: Upload HTML file
-              uses: actions/upload-artifact@v4
+            - name: Upload ZAP JSON Report
+              uses: actions/upload-artifact@v3
               with:
-                name: zaproxy-results
-                path: zap_report.html
+                name: zap-report-json
+                path: zap_report.json
