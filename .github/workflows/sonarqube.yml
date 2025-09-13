@@ -1,0 +1,116 @@
+name: SonarQube Analysis
+
+on:
+  workflow_call: {}
+  workflow_dispatch:
+
+jobs:
+  sonarqube:
+    name: Spin up SQ server & scan via Docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prep runner (jq + kernel params for SonarQube/ES)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          # SonarQube (Elasticsearch) requires increased vm.max_map_count
+          sudo sysctl -w vm.max_map_count=262144
+
+      - name: Create Docker network
+        run: docker network create sonarnet
+
+      - name: Pull images
+        run: |
+          docker pull sonarqube:lts
+          docker pull sonarsource/sonar-scanner-cli:latest
+
+      - name: Start SonarQube server (LTS)
+        run: |
+          docker run -d --name sonar-server \
+            --network sonarnet \
+            -p 9000:9000 \
+            sonarqube:lts
+
+          echo "Waiting for SonarQube to be UP..."
+          # Wait until status returns UP
+          timeout=180
+          elapsed=0
+          until curl -sf http://localhost:9000/api/system/status | grep -q '"UP"'; do
+            sleep 5
+            elapsed=$((elapsed+5))
+            if [ "$elapsed" -ge "$timeout" ]; then
+              echo "SonarQube did not start within ${timeout}s" >&2
+              docker logs sonar-server || true
+              exit 1
+            fi
+            echo "  ...still starting (elapsed ${elapsed}s)"
+          done
+          echo "SonarQube is UP."
+
+      - name: Bootstrap admin, generate token, and create project
+        id: bootstrap
+        env:
+          GITHUB_REPO: ${{ github.repository }}      # e.g. owner/repo
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUM: ${{ github.run_number }}
+        run: |
+          # change the default admin password (if already changed, ignore failure)
+          ADMIN_NEW_PWD="admin$(openssl rand -base64 16 | tr -d '=+/[:space:]')"
+          curl -sf -u admin:admin -X POST \
+            "http://localhost:9000/api/users/change_password" \
+            -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" \
+            || true
+
+          # create a temporary user token as admin
+          TOKEN_JSON=$(curl -sf -u "admin:${ADMIN_NEW_PWD}" -X POST \
+            "http://localhost:9000/api/user_tokens/generate" \
+            -d "name=gha-${RUN_ID}-${RUN_NUM}")
+          SONAR_TOKEN=$(echo "$TOKEN_JSON" | jq -r '.token')
+
+          if [ -z "$SONAR_TOKEN" ] || [ "$SONAR_TOKEN" = "null" ]; then
+            echo "Failed to generate token" >&2
+            exit 1
+          fi
+
+          # project key dynamically from repo, e.g. owner:repo
+          PROJECT_KEY="${GITHUB_REPO//\//:}"
+          PROJECT_NAME="${GITHUB_REPO#*/}"
+
+          # create project (idempotent: if already exists, ignore error)
+          curl -sf -u "${SONAR_TOKEN}:" -X POST \
+            "http://localhost:9000/api/projects/create" \
+            -d "project=${PROJECT_KEY}" \
+            -d "name=${PROJECT_NAME}" || true
+
+          echo "token=${SONAR_TOKEN}" >> $GITHUB_OUTPUT
+          echo "project_key=${PROJECT_KEY}" >> $GITHUB_OUTPUT
+
+      - name: SonarScanner (Docker)
+        env:
+          SONAR_HOST_URL: http://sonar-server:9000
+          SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
+          PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
+        run: |
+          # Optionally pass GITHUB_* vars for branch/PR auto-detection
+          docker run --rm \
+            --network sonarnet \
+            -v "$PWD:/usr/src" \
+            -e SONAR_HOST_URL \
+            -e SONAR_TOKEN \
+            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
+            -e GITHUB_REF -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e GITHUB_REF_NAME -e GITHUB_ACTIONS=true \
+            sonarsource/sonar-scanner-cli:latest
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker logs sonar-server || true
+          docker stop sonar-server || true
+          docker rm sonar-server || true
+          docker network rm sonarnet || true
