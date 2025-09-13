@@ -37,8 +37,10 @@ jobs:
                     echo "No semgrep-results.json found"
                 fi
 
-            - name: Upload JSON file
+            - name: Upload JSON and SARIF files
               uses: actions/upload-artifact@v4
               with:
                 name: semgrep-results
-                path: semgrep-results.json
+                path: |
+                  semgrep-results.json
+                  semgrep-results.sarif
