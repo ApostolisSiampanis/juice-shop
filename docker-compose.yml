@@ -8,9 +8,9 @@ services:
       - "3000:3000"
     volumes:
       - .:/juice-shop
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:3000"]
-      interval: 10s
-      timeout: 5s
-      start_period: 15s
-      retries: 5
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
