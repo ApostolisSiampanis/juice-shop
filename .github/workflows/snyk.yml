@@ -25,11 +25,13 @@ jobs:
               run: |
                 echo "Running Snyk scan..."
                 docker run --rm \
-                -e SNYK_TOKEN="$SNYK_TOKEN" \
-                -v "$(pwd):/project" \
-                snyk/snyk:docker \
-                snyk container test juice-shop \
-                --json > snyk-results.json || true
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  -v "${{ github.workspace }}":/project \
+                  -w /project \
+                  -e SNYK_TOKEN="$SNYK_TOKEN" \
+                  snyk/snyk:docker \
+                  snyk container test juice-shop \
+                  --json > snyk-results.json || true
 
             - name: Print Snyk results summary
               run: |
