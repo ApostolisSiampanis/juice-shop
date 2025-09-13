@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       base_branch:
-        description: 'Default branch name used as base when computing diff (e.g. main). Only used if you switch to base/head mode.'
+        description: 'Default branch name (only used if you later switch to base/head mode).'
         required: false
         default: main
         type: string
@@ -14,7 +14,7 @@ on:
         default: 50
         type: number
       fail_on_any:
-        description: 'If true: fail for ANY finding (verified OR unknown). If false: fail ONLY for verified findings.'
+        description: 'If true, fail on ANY finding; if false, fail ONLY on verified findings.'
         required: false
         default: false
         type: boolean
@@ -56,7 +56,7 @@ jobs:
       - name: Pull TruffleHog image
         run: docker pull trufflesecurity/trufflehog:latest
 
-      # Compute the BASE SHA from which to scan. We use "last N commits" for fast CI.
+      # Decide the scan range by depth for fast CI.
       - name: Decide scan range (since-commit or full)
         id: range
         shell: bash
@@ -65,10 +65,10 @@ jobs:
           SCAN_DEPTH="${{ inputs.scan_depth || github.event.inputs.scan_depth || 50 }}"
 
           if [[ "${SCAN_DEPTH}" -eq 0 ]]; then
-            # Full history: root commit
+            # Full history: use the root commit as base
             BASE_SHA="$(git rev-list --max-parents=0 HEAD | head -n1)"
           else
-            # Last N commits: pick the commit N steps behind HEAD (or root if not enough commits)
+            # Last N commits: use the commit N behind HEAD (or fallback to root)
             if git rev-parse "HEAD~${SCAN_DEPTH}" >/dev/null 2>&1; then
               BASE_SHA="$(git rev-parse "HEAD~${SCAN_DEPTH}")"
             else
@@ -77,7 +77,6 @@ jobs:
           fi
 
           echo "base_sha=${BASE_SHA}" >> "$GITHUB_OUTPUT"
-          echo "scan_depth=${SCAN_DEPTH}" >> "$GITHUB_OUTPUT"
           echo "Using base SHA: ${BASE_SHA}"
 
       - name: Run TruffleHog (Docker)
@@ -89,29 +88,34 @@ jobs:
           FAIL_ON_ANY: ${{ inputs.fail_on_any || github.event.inputs.fail_on_any || false }}
         run: |
           set -euo pipefail
-          # Choose flags based on failure policy:
-          # - fail ONLY on verified findings:   --fail --only-verified
-          # - fail on ANY finding (incl. unknown): --fail
+
+          # Select failure policy:
+          # - Fail ONLY on verified findings:   --fail --only-verified
+          # - Fail on ANY finding (incl. unknown): --fail
           if [[ "${FAIL_ON_ANY}" == "true" ]]; then
             FAIL_FLAGS=(--fail)
           else
             FAIL_FLAGS=(--fail --only-verified)
           fi
 
-          # Split EXTRA_ARGS into an array (safe even if empty)
+          # Split extra args into an array (safe if empty)
           read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
 
-          # Run TruffleHog against local repo history from BASE_SHA..HEAD
+          # IMPORTANT:
+          # - Use the local repo path FIRST with file:// prefix (required for local scans).
+          # - Provide range via flags: --since-commit <BASE_SHA> and optionally --branch HEAD.
+          # - The previous attempt failed because positional "BASE HEAD /workdir" is not
+          #   supported by the image variant you're using and caused "unexpected HEAD".
           docker run --rm \
             -v "$PWD:/workdir" \
             -w /workdir \
             trufflesecurity/trufflehog:latest \
               git \
+              file:///workdir \
               --json \
               "${FAIL_FLAGS[@]}" \
-              "${BASE_SHA}" \
-              HEAD \
-              /workdir \
+              --since-commit "${BASE_SHA}" \
+              --branch HEAD \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_results.json
 
       - name: Upload results artifact (JSON)
