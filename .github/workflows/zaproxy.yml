@@ -3,6 +3,10 @@ name: Dynamic Code Analysis - Zaproxy
 on:
     workflow_call:
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
     zap-dast-full-scan:
         runs-on: ubuntu-latest
@@ -16,3 +20,14 @@ jobs:
 
             - name: Start Juice Shop Application
               run: docker compose -f docker-compose.yml up -d --build
+
+            - name: Wait for application to be healthy
+              run: |
+                for i in {1..30}; do
+                  if curl --silent --fail http://localhost:3000 >/dev/null; then
+                    echo "Application is up!"
+                    break
+                  fi
+                  echo "Waiting for the app... ($i/30)"
+                  sleep 5
+                done            
