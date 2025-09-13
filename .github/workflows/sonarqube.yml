@@ -61,14 +61,12 @@ jobs:
           ADMIN_NEW_PWD="admin$(openssl rand -base64 16 | tr -d '=+/[:space:]')"
           curl -sf -u admin:admin -X POST \
             "http://localhost:9000/api/users/change_password" \
-            -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" \
-            || true
+            -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" || true
 
           TOKEN_JSON=$(curl -sf -u "admin:${ADMIN_NEW_PWD}" -X POST \
             "http://localhost:9000/api/user_tokens/generate" \
             -d "name=gha-${RUN_ID}-${RUN_NUM}")
           SONAR_TOKEN=$(echo "$TOKEN_JSON" | jq -r '.token')
-
           if [ -z "$SONAR_TOKEN" ] || [ "$SONAR_TOKEN" = "null" ]; then
             echo "Failed to generate token" >&2
             exit 1
@@ -86,30 +84,30 @@ jobs:
           echo "token=${SONAR_TOKEN}" >> $GITHUB_OUTPUT
           echo "project_key=${PROJECT_KEY}" >> $GITHUB_OUTPUT
 
-      # Ensure the metadata file directory exists in the mounted workspace
-      - name: Prepare .scannerwork dir
+      - name: Ensure workspace scanner dir
         run: mkdir -p .scannerwork
 
-      - name: SonarScanner (Docker)
+      - name: SonarScanner (Docker) with output
         env:
           SONAR_HOST_URL: http://sonar-server:9000
           SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
           PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
         run: |
+          # Bind both potential working dirs to guarantee we capture report-task.txt
           docker run --rm \
             --network sonarnet \
             -v "$PWD:/usr/src" \
+            -v "$PWD/.scannerwork":/usr/src/.scannerwork \
+            -v "$PWD/.scannerwork":/tmp/.scannerwork \
             -e SONAR_HOST_URL \
             -e SONAR_TOKEN \
-            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} \
-                                    -Dsonar.sources=. \
-                                    -Dsonar.working.directory=/usr/src/.scannerwork \
-                                    -Dsonar.scanner.metadataFile=/usr/src/.scannerwork/report-task.txt" \
-            sonarsource/sonar-scanner-cli:latest
+            -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
+            sonarsource/sonar-scanner-cli:latest | tee scanner.log
 
-      - name: Wait CE completion & export JSON
+      - name: Wait CE completion & export ONE JSON
         run: |
           set -euo pipefail
+
           PROJECT_KEY="${{ steps.bootstrap.outputs.project_key }}"
           SONAR_TOKEN="${{ steps.bootstrap.outputs.token }}"
           echo "::add-mask::${SONAR_TOKEN}"
@@ -117,18 +115,20 @@ jobs:
           SQ_HOST_EXT="http://localhost:9000"
           REPORT_FILE=".scannerwork/report-task.txt"
 
-          # Primary: read ceTaskId from metadata file we forced into the workspace
           CE_TASK_ID=""
           if [ -f "$REPORT_FILE" ]; then
             CE_TASK_ID=$(grep -oP '(?<=ceTaskId=).*' "$REPORT_FILE" || true)
           fi
 
-          # Fallback: ask CE activity for the latest task on this project
+          if [ -z "${CE_TASK_ID:-}" ] && [ -f scanner.log ]; then
+            CE_TASK_ID=$(grep -oE '/api/ce/task\\?id=([A-Za-z0-9_-]+)' scanner.log | tail -n1 | sed -E 's/.*id=//')
+          fi
+
           if [ -z "${CE_TASK_ID:-}" ]; then
-            echo "report-task.txt missing or empty; falling back to CE activity API"
-            CE_TASK_ID=$(curl -sf -u "${SONAR_TOKEN}:" \
-              "${SQ_HOST_EXT}/api/ce/activity?component=${PROJECT_KEY}&ps=1" \
-              | jq -r '.tasks[0].id // empty')
+            echo "report-task.txt and scanner.log did not yield a CE task id; falling back to CE activity API"
+            ACT=$(curl -sf -u "${SONAR_TOKEN}:" \
+              "${SQ_HOST_EXT}/api/ce/activity?component=${PROJECT_KEY}&ps=50")
+            CE_TASK_ID=$(echo "$ACT" | jq -r '.tasks | sort_by(.submittedAt) | last | .id // empty')
           fi
 
           if [ -z "${CE_TASK_ID:-}" ]; then
@@ -199,7 +199,7 @@ jobs:
               users:        ([ .[] | .users[]? ] | unique)
             }' tmp/hotspots-*.json)
 
-          # Build JSON file
+          # Build the JSON file
           jq -n \
             --arg project_key "${PROJECT_KEY}" \
             --arg generated_at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
