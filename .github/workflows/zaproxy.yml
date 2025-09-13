@@ -19,7 +19,7 @@ jobs:
             #  uses: docker/setup-buildx-action@v3
 
             - name: Build the Docker Image
-              uses: docker build . -f Dockerfile -t juice-shop:latest .
+              run: docker build . -f Dockerfile -t juice-shop:latest
 
             - name: Start Application (Juice Shop)
               run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
