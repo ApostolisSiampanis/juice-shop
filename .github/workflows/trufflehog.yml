@@ -1,87 +1,75 @@
 name: TruffleHog Secrets Scan
 
 on:
+
   workflow_call:
     inputs:
-      base_branch:
-        description: 'Default base branch to diff against (used to compute fork-point).'
-        required: false
-        default: main
-        type: string
       fail_on_any:
-        description: 'If true, fail on ANY finding; if false, fail ONLY on verified findings.'
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
         required: false
         default: false
         type: boolean
       extra_args:
-        description: 'Additional flags (e.g. --exclude-paths=.trufflehogignore).'
+        description: 'Extra flags to pass to trufflehog (optional)'
         required: false
         default: ''
         type: string
+
   workflow_dispatch:
     inputs:
-      base_branch:
-        description: 'Base branch'
-        required: false
-        default: 'main'
       fail_on_any:
-        description: 'Fail on ANY finding (true) or ONLY verified (false)'
+        description: 'If true, fail on any finding; otherwise only verified secrets cause failure'
         required: false
         default: 'false'
       extra_args:
-        description: 'Additional flags'
+        description: 'Extra flags to pass to trufflehog (optional)'
         required: false
         default: ''
 
 jobs:
   trufflehog:
-    name: TruffleHog (Docker) – full branch + filesystem
+    name: TruffleHog Secrets Scan
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository (full history)
+
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Fetch all remote refs
+        run: |
+          git fetch --quiet origin "+refs/*:refs/remotes/origin/*"
+
       - name: Pull TruffleHog image
         run: docker pull trufflesecurity/trufflehog:latest
 
-      # Compute fork-point so we scan the ENTIRE branch history (from divergence with base to HEAD)
-      - name: Compute fork-point (base ↔ HEAD)
-        id: fork
-        shell: bash
-        run: |
-          set -euo pipefail
-          BASE_BRANCH="${{ inputs.base_branch || github.event.inputs.base_branch || 'main' }}"
-          # Ensure remote base ref exists locally
-          git fetch --no-tags --prune origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
-          FORK_POINT="$(git merge-base "origin/${BASE_BRANCH}" HEAD)"
-          echo "fork_point=${FORK_POINT}" >> "$GITHUB_OUTPUT"
-          echo "Using fork-point: ${FORK_POINT}"
-
-      - name: Set failure policy flags
-        id: policy
+      - name: Set TruffleHog flags
+        id: flags
         shell: bash
         env:
           FAIL_ON_ANY: ${{ inputs.fail_on_any || github.event.inputs.fail_on_any || false }}
         run: |
+          set -euo pipefail
           if [[ "${FAIL_ON_ANY}" == "true" ]]; then
-            echo 'flags=--fail' >> "$GITHUB_OUTPUT"
+            echo "fail_flag=--fail" >> "$GITHUB_OUTPUT"
           else
-            echo 'flags=--fail --only-verified' >> "$GITHUB_OUTPUT"
+            echo "fail_flag=" >> "$GITHUB_OUTPUT"
           fi
+          # Always include all result types; filtering secrets with
+          # --results=verified,unknown or using --only-verified can suppress
+          # unverified results and cause legitimate secrets to be missed【104025215300955†L1059-L1063】.
+          echo "results_flag=" >> "$GITHUB_OUTPUT"
 
-      - name: TruffleHog – GIT (full branch history)
+      - name: TruffleHog – git scan (entire repo)
         shell: bash
         env:
-          FORK_POINT: ${{ steps.fork.outputs.fork_point }}
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
-          FAIL_FLAGS: ${{ steps.policy.outputs.flags }}
+          FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
+          RESULTS_FLAG: ${{ steps.flags.outputs.results_flag }}
         run: |
           set -euo pipefail
           read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
-          # Scan local git repo from fork-point to HEAD
           docker run --rm \
             -v "$PWD:/workdir" \
             -w /workdir \
@@ -89,20 +77,20 @@ jobs:
               git \
               file:///workdir \
               --json \
-              ${FAIL_FLAGS} \
-              --since-commit "${FORK_POINT}" \
-              --branch HEAD \
+              ${FAIL_FLAG} \
+              ${RESULTS_FLAG} \
+              --all-branches \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_git.json
 
-      - name: TruffleHog – FILESYSTEM (HEAD snapshot)
+      - name: TruffleHog – filesystem scan
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
-          FAIL_FLAGS: ${{ steps.policy.outputs.flags }}
+          FAIL_FLAG: ${{ steps.flags.outputs.fail_flag }}
+          RESULTS_FLAG: ${{ steps.flags.outputs.results_flag }}
         run: |
           set -euo pipefail
           read -r -a EXTRA_ARR <<< "${EXTRA_ARGS}"
-          # Scan the working tree contents at HEAD
           docker run --rm \
             -v "$PWD:/workdir" \
             -w /workdir \
@@ -110,15 +98,15 @@ jobs:
               filesystem \
               /workdir \
               --json \
-              ${FAIL_FLAGS} \
+              ${FAIL_FLAG} \
+              ${RESULTS_FLAG} \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_fs.json
 
-      - name: Upload results artifacts
-        if: always()
+      - name: Upload TruffleHog results
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: trufflehog-results
           path: |
             trufflehog_git.json
             trufflehog_fs.json
-          if-no-files-found: warn
