@@ -18,16 +18,5 @@ jobs:
             - name: Set up Docker buildx
               uses: docker/setup-buildx-action@v3
 
-            - name: Start Juice Shop Application
-              run: docker compose -f docker-compose.yml up -d --build
-
-            - name: Wait for application to be healthy
-              run: |
-                for i in {1..30}; do
-                  if curl --silent --fail http://localhost:3000 >/dev/null; then
-                    echo "Application is up!"
-                    break
-                  fi
-                  echo "Waiting for the app... ($i/30)"
-                  sleep 5
-                done            
+            - name: Start Application (Juice Shop)
+              run: docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 60s        
