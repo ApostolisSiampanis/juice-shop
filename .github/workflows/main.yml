@@ -16,6 +16,10 @@ permissions:
   id-token: write
 
 jobs:
+  
+  sonarqube:
+    name: Static Code Analysis - SonarQube
+    uses: ./.github/workflows/sonarqube.yml
 
   semgrep:
     name: Static Code Analysis - Semgrep
