@@ -40,7 +40,7 @@ jobs:
                   echo "No semgrep-results.json found"
               fi
 
-          - name: Upload JSON and SARIF files
+          - name: Upload scan results
             uses: actions/upload-artifact@v4
             with:
               name: semgrep-results
@@ -52,4 +52,6 @@ jobs:
           - name: Clean up
             if: always()
             run: |
+              docker stop semgrep || true
+              docker rm semgrep || true
               docker image rm semgrep/semgrep:latest || true

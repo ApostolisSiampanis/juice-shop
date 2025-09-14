@@ -1,7 +1,6 @@
 name: Network Scan - Nmap
 
 on:
-  # Run manually, or reuse via workflow_call if you like
   workflow_call:
     inputs:
       compose_project_name:
@@ -14,19 +13,16 @@ on:
         required: false
         type: string        
         default: 'docker-compose.yml'
-      # Space-separated list of service names to scan (must match services in your compose file)
       service_names:
         description: 'Compose service names to scan (DNS-resolvable on the Compose network)'
         required: false
         type: string        
         default: 'juice-shop'
-      # Ports to scan (use 1-65535 for full TCP; you can narrow for speed)
       ports:
         description: 'Ports to scan (e.g., 1-65535 or 80,443,3000)'
         required: false
         type: string        
         default: '1-65535'
-      # Extra Nmap flags; -sT works as non-root inside container; --open prints only open ports
       extra_nmap_args:
         description: 'Additional Nmap arguments'
         required: false
@@ -42,12 +38,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Build the custom Nmap image from .github/nmap/Dockerfile
       - name: Build Nmap image
         run: |
           docker build -t local/nmap -f .github/nmap/Dockerfile .
 
-      # Bring up Juice Shop (and anything else in your compose file)
       - name: Start services with docker compose
         env:
           COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
@@ -124,16 +118,18 @@ jobs:
         with:
           name: nmap-results
           path: scan/
+          retention-days: 7
 
-      - name: Tear down docker compose
+      - name: Delete Juice Shop Container
         if: always()
         env:
           COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
         run: |
           docker compose -p "${COMPOSE_PROJECT_NAME}" down -v
 
-      # Remove the locally built Nmap image to clean up disk space
-      - name: Clean up image
+      - name: Delete Nmap Container
         if: always()
         run: |
+          docker stop local/nmap || true
+          docker rm local/nmap || true
           docker image rm local/nmap || true

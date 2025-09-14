@@ -1,7 +1,6 @@
 name: Secrets Scan - TruffleHog
 
 on:
-  # Allow this workflow to be called from another workflow
   workflow_call:
     inputs:
       fail_on_any:
@@ -14,7 +13,7 @@ on:
         required: false
         default: ''
         type: string
-  # Permit manual execution for ad‑hoc scans
+
   workflow_dispatch:
     inputs:
       fail_on_any:
@@ -31,13 +30,11 @@ jobs:
     name: Secrets Scan - TruffleHog
     runs-on: ubuntu-latest
     steps:
-      # Fetch the complete history so we can compare against any base commit
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Compute the first commit (root) of the currently checked‑out branch.
       - name: Compute root commit
         id: root
         shell: bash
@@ -66,7 +63,7 @@ jobs:
             echo "fail_flag=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: TruffleHog – git scan (full branch history)
+      - name: git scan (full branch history)
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
@@ -87,7 +84,7 @@ jobs:
               --branch HEAD \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_git.json
 
-      - name: TruffleHog – filesystem scan
+      - name: filesystem scan
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.extra_args || github.event.inputs.extra_args || '' }}
@@ -105,7 +102,7 @@ jobs:
               ${FAIL_FLAG} \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_fs.json
 
-      - name: Upload TruffleHog results
+      - name: Upload scan results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -118,7 +115,6 @@ jobs:
       - name: Clean up
         if: always()
         run: |
-          # Remove the pulled TruffleHog Docker image. The scan containers are run
-          # with --rm so they don't persist, but the image remains cached on the
-          # runner unless explicitly removed.
+          docker stop trufflesecurity/trufflehog || true
+          docker rm trufflesecurity/trufflehog || true
           docker image rm trufflesecurity/trufflehog:latest || true
