@@ -34,3 +34,18 @@ jobs:
     uses: ./.github/workflows/snyk.yml
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  nmap_compose_scan:
+    name: Network Scan – Nmap via Docker Compose
+    uses: ./.github/workflows/nmap.yml
+    with:
+      # Path to your compose file at repo root
+      compose_file: docker-compose.yml
+      # Compose project name (helps isolate the network)
+      compose_project_name: juice-shop-ci
+      # Service names to scan inside the Compose network (comma-separated)
+      service_names: juice-shop
+      # What to scan: either specific ports or full range; adjust to taste
+      ports: "-p-"
+      # Extra nmap flags (examples: SYN scan, faster timing, skip DNS)
+      extra_nmap_args: "-sS -T4 -n"

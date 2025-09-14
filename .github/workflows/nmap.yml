@@ -1,0 +1,96 @@
+name: Nmap Analysis
+
+on:
+  # Run manually, or reuse via workflow_call if you like
+  workflow_dispatch:
+    inputs:
+      compose_project_name:
+        description: 'Compose project name (controls the default network name <project>_default)'
+        required: false
+        default: 'juice'
+      compose_file:
+        description: 'Path to docker-compose file at repo root'
+        required: false
+        default: 'docker-compose.yml'
+      # Space-separated list of service names to scan (must match services in your compose file)
+      service_names:
+        description: 'Compose service names to scan (DNS-resolvable on the Compose network)'
+        required: false
+        default: 'juice-shop'
+      # Ports to scan (use 1-65535 for full TCP; you can narrow for speed)
+      ports:
+        description: 'Ports to scan (e.g., 1-65535 or 80,443,3000)'
+        required: false
+        default: '1-65535'
+      # Extra Nmap flags; -sT works as non-root inside container; --open prints only open ports
+      extra_nmap_args:
+        description: 'Additional Nmap arguments'
+        required: false
+        default: '-sT -T4 --open -Pn'
+
+jobs:
+  nmap:
+    name: Build Nmap image, run Compose, and scan services
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Build the custom Nmap image from .github/nmap/Dockerfile
+      - name: Build Nmap image
+        run: |
+          docker build -t local/nmap -f .github/nmap/Dockerfile .
+
+      # Bring up Juice Shop (and anything else in your compose file)
+      - name: Start services with docker compose
+        env:
+          COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
+        run: |
+          # -p sets the project name deterministically; the default network will be <project>_default
+          docker compose -f "${{ inputs.compose_file }}" -p "${COMPOSE_PROJECT_NAME}" up -d
+          
+          # Give containers a few seconds to start. Adjust if you need more time for heavy images.
+          sleep 10
+          
+          echo "Compose status:"
+          docker compose -p "${COMPOSE_PROJECT_NAME}" ps
+
+      # Run the Nmap container on the same Compose default network and scan the requested services
+      - name: Run Nmap scan (inside Compose default network)
+        env:
+          COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
+        run: |
+          set -euo pipefail
+          NETWORK="${COMPOSE_PROJECT_NAME}_default"
+          TARGETS="${{ inputs.service_names }}"
+          PORTS="${{ inputs.ports }}"
+          
+          mkdir -p scan
+          
+          # Use the Compose default network so service names (e.g., 'juice-shop') resolve via DNS.
+          # Output as human-readable text (-oN) and XML (-oX). Add -oJ as well if your Nmap supports JSON.
+          docker run --rm \
+            --network "$NETWORK" \
+            -v "$PWD/scan:/out" \
+            local/nmap \
+              ${{ inputs.extra_nmap_args }} \
+              -p "$PORTS" \
+              $TARGETS \
+              -oN /out/nmap_open_ports.txt \
+              -oX /out/nmap_open_ports.xml
+          
+          echo "Scan files written to ./scan"
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: nmap-results
+          path: scan/
+
+      - name: Tear down docker compose
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
+        run: |
+          docker compose -p "${COMPOSE_PROJECT_NAME}" down -v
