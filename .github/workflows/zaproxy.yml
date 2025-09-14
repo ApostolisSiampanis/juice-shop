@@ -1,4 +1,4 @@
-name: Dynamic Code Analysis - Zaproxy
+name: Dynamic Application Security Testing - ZAP
 
 on:
     workflow_call:
@@ -9,11 +9,17 @@ permissions:
 
 jobs:
   zap-dast-full-scan:
+    name: Dynamic Application Security Testing - ZAP
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
 
       - name: Build the Docker Image
         run: docker build . -f Dockerfile -t juice-shop:latest
@@ -77,3 +83,11 @@ jobs:
             zap-reports/zap-report.html
             zap-reports/zap-report.json
             zap-reports/gen.conf
+          retention-days: 7
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker stop juice-shop || true
+          docker rm juice-shop || true
+          docker image rm juice-shop:latest || true

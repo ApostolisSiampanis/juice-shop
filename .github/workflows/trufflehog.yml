@@ -1,4 +1,4 @@
-name: TruffleHog Secrets Scan
+name: Secrets Scan - TruffleHog
 
 on:
   # Allow this workflow to be called from another workflow
@@ -28,7 +28,7 @@ on:
 
 jobs:
   trufflehog:
-    name: TruffleHog Secrets Scan
+    name: Secrets Scan - TruffleHog
     runs-on: ubuntu-latest
     steps:
       # Fetch the complete history so we can compare against any base commit
@@ -113,3 +113,12 @@ jobs:
           path: |
             trufflehog_git.json
             trufflehog_fs.json
+          retention-days: 7
+
+      - name: Clean up
+        if: always()
+        run: |
+          # Remove the pulled TruffleHog Docker image. The scan containers are run
+          # with --rm so they don't persist, but the image remains cached on the
+          # runner unless explicitly removed.
+          docker image rm trufflesecurity/trufflehog:latest || true
