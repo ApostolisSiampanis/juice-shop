@@ -81,6 +81,6 @@ jobs:
         with:
           name: zap-scan-reports
           path: |
-            zap-report.html
-            zap-report.json
-            gen.conf
+            zap-reports/zap-report.html
+            zap-reports/zap-report.json
+            zap-reports/gen.conf
