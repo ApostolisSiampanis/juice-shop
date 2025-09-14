@@ -23,6 +23,10 @@ jobs:
               run: |
                 sudo apt-get update -y
                 sudo apt-get install -y jq
+                
+            - name: Build local Docker image
+              run: |
+                docker build -t local/juice-shop:ci .
             
             - name: Run Snyk Open Source Scan
               env:
@@ -35,10 +39,11 @@ jobs:
                   -w /project \
                   -e SNYK_TOKEN="$SNYK_TOKEN" \
                   snyk/snyk:docker \
-                  snyk container test bkimminich/juice-shop:latest \
+                  snyk container test local/juice-shop:ci \
+                  --severity-threshold=high \
                   --json-file-output=snyk-results.json \
                   --sarif-file-output=snyk-results.sarif \
-                  || true
+                  
 
             - name: Print Snyk results summary
               run: |

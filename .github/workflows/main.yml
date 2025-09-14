@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "**" ]
   workflow_dispatch:
 
 permissions: 
@@ -20,6 +20,8 @@ jobs:
   trufflehog:
     name: Secrets Scan - TruffleHog
     uses: ./.github/workflows/trufflehog.yml
+    with:
+      fail_on_any: true
 
   sonarqube:
     name: Static Code Analysis - SonarQube
@@ -53,3 +55,4 @@ jobs:
       service_names: app
       ports: "1-65535"
       extra_nmap_args: "-sT -T4 -n --open -Pn"
+      allowed_ports: "3000"

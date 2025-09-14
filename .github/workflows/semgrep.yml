@@ -24,9 +24,11 @@ jobs:
                 -v "$(pwd):/src" \
                 semgrep/semgrep:latest \
                 semgrep scan --config=auto \
+                --error \
+                --severity=WARNING \
                 --sarif-output=/src/semgrep-results.sarif \
                 --json --output=/src/semgrep-results.json \
-                --verbose || true
+                --verbose
 
           - name: Semgrep results
             run: |
@@ -48,7 +50,7 @@ jobs:
                 semgrep-results.json
                 semgrep-results.sarif
               retention-days: 7
-              
+                      
           - name: Clean up
             if: always()
             run: |
