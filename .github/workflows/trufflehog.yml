@@ -102,7 +102,7 @@ jobs:
               ${FAIL_FLAG} \
               "${EXTRA_ARR[@]:-}" | tee trufflehog_fs.json
 
-      - name: Upload TruffleHog results
+      - name: Upload scan results
         uses: actions/upload-artifact@v4
         if: always()
         with:
