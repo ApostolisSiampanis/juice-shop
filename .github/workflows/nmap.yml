@@ -2,30 +2,35 @@ name: Nmap Analysis
 
 on:
   # Run manually, or reuse via workflow_call if you like
-  workflow_dispatch:
+  workflow_call:
     inputs:
       compose_project_name:
         description: 'Compose project name (controls the default network name <project>_default)'
         required: false
+        type: string
         default: 'juice'
       compose_file:
         description: 'Path to docker-compose file at repo root'
         required: false
+        type: string        
         default: 'docker-compose.yml'
       # Space-separated list of service names to scan (must match services in your compose file)
       service_names:
         description: 'Compose service names to scan (DNS-resolvable on the Compose network)'
         required: false
+        type: string        
         default: 'juice-shop'
       # Ports to scan (use 1-65535 for full TCP; you can narrow for speed)
       ports:
         description: 'Ports to scan (e.g., 1-65535 or 80,443,3000)'
         required: false
+        type: string        
         default: '1-65535'
       # Extra Nmap flags; -sT works as non-root inside container; --open prints only open ports
       extra_nmap_args:
         description: 'Additional Nmap arguments'
         required: false
+        type: string            
         default: '-sT -T4 --open -Pn'
 
 jobs:
