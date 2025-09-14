@@ -45,7 +45,7 @@ jobs:
 
   nmap:
     name: Network Scan - Nmap
-    needs: snyk
+    needs: zap-baseline
     uses: ./.github/workflows/nmap.yml
     with:
       compose_file: docker-compose.test.yml
