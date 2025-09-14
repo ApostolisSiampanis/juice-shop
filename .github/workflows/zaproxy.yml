@@ -23,17 +23,24 @@ jobs:
 
             - name: Run ZAP Baseline Scan
               run: |
+                mkdir -p zap-reports
+                chmod 777 zap-reports 
                 docker run --rm \
-                  -u ${{ runner.uid }}:${{ runner.gid }} \
-                  -v "${{ github.workspace }}/zap-reports:/zap/wrk/:rw" \
+                  -v "$(pwd):/zap/wrk/:rw" \
                   --network="host" \
                   -t ghcr.io/zaproxy/zaproxy:stable \
                   zap-baseline.py \
-                  -t http://localhost:3000 -J \
-                  /zap/wrk/zap_report.json || true
+                  -t http://localhost:3000 \
+                  -g /zap/wrk/gen.conf \
+                  -J /zap/wrk/zap_report.json \
+                  -I \
+                  -T 10 \
+                  -d || true
 
-            - name: Upload ZAP JSON Report
+            - name: Upload ZAP reports
               uses: actions/upload-artifact@v4
               with:
-                name: zap-report-json
-                path: zap_report.json
+                name: zap-scan-reports
+                path: |
+                  zap_report.json
+                  gen.conf
