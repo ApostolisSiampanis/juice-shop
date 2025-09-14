@@ -17,6 +17,10 @@ permissions:
 
 jobs:
   
+  trufflehog:
+    name: Secrets Scan - TruffleHog (Docker)
+    uses: ./.github/workflows/trufflehog.yml
+
   sonarqube:
     name: Static Code Analysis - SonarQube
     uses: ./.github/workflows/sonarqube.yml
@@ -34,3 +38,12 @@ jobs:
   zap-baseline:
     name: ZAP Baseline Scan
     uses: ./.github/workflows/zaproxy.yml
+    
+  nmap_compose_scan:
+    uses: ./.github/workflows/nmap.yml
+    with:
+      compose_file: docker-compose.test.yml
+      compose_project_name: juice-shop-ci
+      service_names: app
+      ports: "1-65535"
+      extra_nmap_args: "-sT -T4 -n --open -Pn"
