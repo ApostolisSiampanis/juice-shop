@@ -19,7 +19,7 @@ jobs:
               run: docker build . -f Dockerfile -t juice-shop:latest
 
             - name: Start Application (Juice Shop)
-              run: docker run --network host --name juice-shop juice-shop:latest
+              run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
 
             - name: Wait for application to be ready
               run: |
@@ -48,6 +48,7 @@ jobs:
             - name: Run SQLMap scan  
               run: |
                 docker run --rm \
+                  --network host \
                   -v "${{ github.workspace }}/sqlmap-reports:/root/.sqlmap/reports" \
                   parrotsec/sqlmap:latest \
                   -u "http://localhost:3000" \
