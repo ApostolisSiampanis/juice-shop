@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run Semgrep on staged files.
+# Skippable with: SKIP_SECURITY_HOOKS=1 git commit ...
+set -euo pipefail
+
+if [[ "${SKIP_SECURITY_HOOKS:-}" == "1" ]]; then
+  echo "[pre-commit] Security hooks skipped via SKIP_SECURITY_HOOKS=1"
+  exit 0
+fi
+
+# Collect staged files (added/copied/modified/renamed/typechanged)
+mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACMRT | sed '/^$/d')
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "[pre-commit] No staged files."
+  exit 0
+fi
+
+# Optionally filter to likely code files to keep it fast
+FILTER_RE='\.(js|jsx|ts|tsx|py|java|rb|go|php|c|cc|cxx|cpp|cs|sh|yaml|yml|json|tsconfig|properties)$'
+mapfile -t CODE_FILES < <(printf '%s\n' "${FILES[@]}" | grep -E "$FILTER_RE" || true)
+if [[ ${#CODE_FILES[@]} -eq 0 ]]; then
+  echo "[pre-commit] No staged code files to scan."
+  exit 0
+fi
+
+echo "[pre-commit] Running Semgrep on ${#CODE_FILES[@]} file(s)..."
+
+# Ensure output dir exists
+mkdir -p .git
+
+# Run Semgrep in Docker against only the staged files
+docker run --rm \
+  -v "${PWD}:/src" \
+  -w /src \
+  semgrep/semgrep:latest \
+  semgrep scan --config=auto \
+    --error \
+    --severity=WARNING \
+    --json --output=.git/semgrep-precommit.json \
+    --sarif-output=.git/semgrep-precommit.sarif \
+    -- "${CODE_FILES[@]}"
+
+echo "[pre-commit] Semgrep passed."

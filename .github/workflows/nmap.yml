@@ -28,6 +28,11 @@ on:
         required: false
         type: string            
         default: '-sT -T4 --open -Pn'
+      allowed_ports:
+        description: 'Comma-separated allowed open ports (e.g., 80,443,3000)'
+        required: false
+        type: string
+        default: '3000'
 
 jobs:
   nmap:
@@ -119,6 +124,45 @@ jobs:
           name: nmap-results
           path: scan/
           retention-days: 7
+
+      - name: Enforce allowed open ports
+        run: |
+          set -euo pipefail
+          ALLOWED_RAW='${{ inputs.allowed_ports }}'
+          # Normalize allowed list to array
+          IFS=',' read -r -a ALLOWED_ARR <<< "${ALLOWED_RAW}"
+          # Build an associative set for quick lookup
+          declare -A ALLOWED_SET
+          for p in "${ALLOWED_ARR[@]}"; do
+            p_trim=$(echo "$p" | xargs)
+            [[ -n "$p_trim" ]] && ALLOWED_SET[$p_trim]=1
+          done
+
+          # Parse open ports from normal output
+          OPEN_PORTS=()
+          if [[ -f scan/nmap_open_ports.txt ]]; then
+            # Lines like: "PORT   STATE SERVICE" and "3000/tcp open something"
+            while read -r line; do
+              port=$(echo "$line" | awk -F'/' '/open/ {print $1}')
+              [[ -n "$port" ]] && OPEN_PORTS+=("$port")
+            done < <(grep -E "open" scan/nmap_open_ports.txt || true)
+          fi
+
+          echo "Detected open ports: ${OPEN_PORTS[*]:-none}"
+
+          VIOLATIONS=()
+          for op in "${OPEN_PORTS[@]:-}"; do
+            [[ -z "$op" ]] && continue
+            if [[ -z "${ALLOWED_SET[$op]:-}" ]]; then
+              VIOLATIONS+=("$op")
+            fi
+          done
+
+          if [[ ${#VIOLATIONS[@]} -gt 0 ]]; then
+            echo "ERROR: Unexpected open ports: ${VIOLATIONS[*]} (allowed: ${ALLOWED_RAW})" >&2
+            exit 1
+          fi
+          echo "Open ports are within allowed list (${ALLOWED_RAW})."
 
       - name: Delete Juice Shop Container
         if: always()

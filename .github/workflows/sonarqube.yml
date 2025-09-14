@@ -190,6 +190,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Check Quality Gate status
+        env:
+          SONAR_HOST_URL: http://localhost:9000
+          SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
+          PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
+        run: |
+          set -euo pipefail
+          STATUS_JSON=$(curl -sSf -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=${PROJECT_KEY}")
+          echo "$STATUS_JSON" | jq .
+          STATUS=$(echo "$STATUS_JSON" | jq -r '.projectStatus.status')
+          echo "Quality Gate: $STATUS"
+          if [ "$STATUS" != "OK" ]; then
+            echo "SonarQube Quality Gate failed with status '$STATUS'" >&2
+            exit 1
+          fi
+
       - name: Clean up
         if: always()
         run: |

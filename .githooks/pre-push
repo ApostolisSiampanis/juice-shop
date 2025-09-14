@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Pre-push hook: run TruffleHog over the range being pushed.
+# Skippable with: SKIP_SECURITY_HOOKS=1 git push ...
+set -euo pipefail
+
+if [[ "${SKIP_SECURITY_HOOKS:-}" == "1" ]]; then
+  echo "[pre-push] Security hooks skipped via SKIP_SECURITY_HOOKS=1"
+  exit 0
+fi
+
+remote_name="$1"; remote_url="$2"
+echo "[pre-push] Remote: ${remote_name:-?} URL: ${remote_url:-?}"
+
+# Read refs from stdin: <local_ref> <local_sha> <remote_ref> <remote_sha>
+ranges=()
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -z "${local_sha:-}" || -z "${remote_sha:-}" ]] && continue
+  ranges+=("${remote_sha}..${local_sha}")
+done
+
+# If no refs on stdin (rare), fall back to whole history
+if [[ ${#ranges[@]} -eq 0 ]]; then
+  root_sha=$(git rev-list --max-parents=0 HEAD | head -n1)
+  head_sha=$(git rev-parse HEAD)
+  ranges=("${root_sha}..${head_sha}")
+fi
+
+mkdir -p .git
+
+fail=0
+for r in "${ranges[@]}"; do
+  since_sha="${r%%..*}"
+  to_sha="${r##*..}"
+  # 40 zeros means remote missing; use repo root as since
+  if [[ "$since_sha" =~ ^0{40}$ ]]; then
+    since_sha=$(git rev-list --max-parents=0 "$to_sha" | head -n1)
+  fi
+
+  echo "[pre-push] Scanning commits ${since_sha}..${to_sha} for secrets with TruffleHog..."
+  # Run TruffleHog Docker image in git mode over local repo
+  if ! docker run --rm \
+      -v "${PWD}:/workdir" \
+      -w /workdir \
+      trufflesecurity/trufflehog:latest \
+        git \
+        file:///workdir \
+        --since-commit "${since_sha}" \
+        --branch "${to_sha}" \
+        --fail \
+        --json | tee ".git/trufflehog-prepush-${to_sha:0:8}.json"; then
+    echo "[pre-push] TruffleHog found potential secrets in range ${since_sha}..${to_sha}." >&2
+    fail=1
+  fi
+done
+
+if [[ "$fail" -ne 0 ]]; then
+  cat <<'EOF'
+
+[pre-push] Push blocked due to potential secrets detected by TruffleHog.
+- Review the JSON reports under .git/trufflehog-prepush-*.json
+- If this is a false positive, rotate/mitigate and force-push only if policy allows.
+- To bypass temporarily: SKIP_SECURITY_HOOKS=1 git push (not recommended)
+EOF
+  exit 1
+fi
+
+echo "[pre-push] TruffleHog passed."
