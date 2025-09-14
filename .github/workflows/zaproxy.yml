@@ -21,6 +21,17 @@ jobs:
             - name: Start Application (Juice Shop)
               run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
 
+            - name: Wait for application to be ready
+              run: |
+                for i in {1..30}; do
+                  if curl --silent --fail http://localhost:3000 >/dev/null 2>&1; then
+                    echo "App is up"
+                    break
+                  fi
+                  echo "Waiting for app... ($i/30)"
+                  sleep 5
+                done
+
             - name: Login to Juice Shop to get Bearer Token
               id: login
               run: |
