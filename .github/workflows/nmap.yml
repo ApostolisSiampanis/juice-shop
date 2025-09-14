@@ -1,4 +1,4 @@
-name: Nmap Analysis
+name: Network Scan - Nmap
 
 on:
   # Run manually, or reuse via workflow_call if you like
@@ -35,7 +35,7 @@ on:
 
 jobs:
   nmap:
-    name: Build Nmap image, run Compose, and scan services
+    name: Network Scan - Nmap
     runs-on: ubuntu-latest
 
     steps:
@@ -131,3 +131,9 @@ jobs:
           COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
         run: |
           docker compose -p "${COMPOSE_PROJECT_NAME}" down -v
+
+      # Remove the locally built Nmap image to clean up disk space
+      - name: Clean up image
+        if: always()
+        run: |
+          docker image rm local/nmap || true

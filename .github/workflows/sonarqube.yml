@@ -1,4 +1,4 @@
-name: SonarQube Analysis
+name: Static Code Analysis - SonarQube
 
 on:
   workflow_call: {}
@@ -15,10 +15,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prep runner (jq + kernel params for SonarQube/ES)
+      - name: Prep runner (jq + curl + kernel params for SonarQube/ES)
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq curl
           # SonarQube (Elasticsearch), change vm.max_map_count
           sudo sysctl -w vm.max_map_count=262144
 
@@ -27,15 +27,15 @@ jobs:
 
       - name: Pull images
         run: |
-          docker pull sonarqube:lts
+          docker pull sonarqube:lts-community
           docker pull sonarsource/sonar-scanner-cli:latest
 
-      - name: Start SonarQube server (LTS)
+      - name: Start SonarQube server (LTS Community)
         run: |
           docker run -d --name sonar-server \
             --network sonarnet \
             -p 9000:9000 \
-            sonarqube:lts
+            sonarqube:lts-community
 
           echo "Waiting for SonarQube to be UP..."
           # Wait until you get status UP
@@ -67,7 +67,7 @@ jobs:
             -d "login=admin&previousPassword=admin&password=${ADMIN_NEW_PWD}" \
             || true
 
-          # Create a admin token
+          # Create an admin token
           TOKEN_JSON=$(curl -sf -u "admin:${ADMIN_NEW_PWD}" -X POST \
             "http://localhost:9000/api/user_tokens/generate" \
             -d "name=gha-${RUN_ID}-${RUN_NUM}")
@@ -82,7 +82,7 @@ jobs:
           PROJECT_KEY="${GITHUB_REPO//\//:}"
           PROJECT_NAME="${GITHUB_REPO#*/}"
 
-          # Create project
+          # Create project (token as Basic auth username with empty password)
           curl -sf -u "${SONAR_TOKEN}:" -X POST \
             "http://localhost:9000/api/projects/create" \
             -d "project=${PROJECT_KEY}" \
@@ -105,6 +105,90 @@ jobs:
             -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.sources=." \
             -e GITHUB_REF -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e GITHUB_REF_NAME -e GITHUB_ACTIONS=true \
             sonarsource/sonar-scanner-cli:latest
+
+      - name: Wait for analysis and export SonarQube results (JSON)
+        env:
+          SONAR_HOST_URL: http://localhost:9000
+          SONAR_TOKEN: ${{ steps.bootstrap.outputs.token }}
+          PROJECT_KEY: ${{ steps.bootstrap.outputs.project_key }}
+        run: |
+          set -euo pipefail
+
+          HOST="${SONAR_HOST_URL}"
+          TOKEN="${SONAR_TOKEN}"
+          PK="${PROJECT_KEY}"
+
+          auth() { curl -sSf -u "${TOKEN}:" "$@"; }
+
+          echo "Polling SonarQube for completed analysis for project ${PK}..."
+          attempts=0
+          max_attempts=40
+          sleep_seconds=5
+          while [ $attempts -lt $max_attempts ]; do
+            attempts=$((attempts+1))
+            resp=$(auth "${HOST}/api/project_analyses/search?project=${PK}")
+            anal_count=$(echo "$resp" | jq '.analyses | length' 2>/dev/null || echo 0)
+            if [ "${anal_count}" -gt 0 ]; then
+              echo "Found ${anal_count} analysis entries."
+              break
+            fi
+            echo "No analyses yet (attempt ${attempts}/${max_attempts}). Sleeping ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          done
+
+          # ---- Issues (paginated) ----
+          echo "Fetching issues (JSON) for ${PK}..."
+          echo '[]' > tmp_issues.json
+          p=1
+          ps=500
+          while : ; do
+            page=$(auth "${HOST}/api/issues/search?componentKeys=${PK}&resolved=false&ps=${ps}&p=${p}")
+            echo "$page" | jq '.issues' > page_issues.json
+            n=$(jq 'length' page_issues.json)
+            if [ "$n" -eq 0 ]; then
+              break
+            fi
+            jq -s '.[0] + .[1]' tmp_issues.json page_issues.json > tmp_issues_merged.json
+            mv tmp_issues_merged.json tmp_issues.json
+            if [ "$n" -lt "$ps" ]; then
+              break
+            fi
+            p=$((p+1))
+          done
+          jq -n --slurpfile arr tmp_issues.json '{issues:$arr[0]}' > sonar-issues.json
+
+          # ---- Measures ----
+          echo "Fetching measures (JSON)..."
+          auth "${HOST}/api/measures/component?component=${PK}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density" \
+            > sonar-measures.json || echo '{}' > sonar-measures.json
+
+          # ---- Project info ----
+          echo "Fetching project info (JSON)..."
+          auth "${HOST}/api/components/show?component=${PK}" \
+            > sonar-project.json || echo '{}' > sonar-project.json
+
+          # ---- Combine into the artifact expected by the workflow ----
+          jq -n \
+            --slurpfile issues sonar-issues.json \
+            --slurpfile measures sonar-measures.json \
+            --slurpfile project sonar-project.json \
+            '{project: ($project[0].component // {}), measures: ($measures[0].component.measures // []), issues: ($issues[0].issues // [])}' \
+            > sonarqube-results.json
+
+          echo "Exported $(jq '.issues | length' sonarqube-results.json) issues to sonarqube-results.json"
+          ls -la sonarqube-results.json
+
+      - name: Upload SonarQube results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonarqube-results
+          path: |
+            sonarqube-results.json
+            sonar-issues.json
+            sonar-measures.json
+            sonar-project.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Clean up
         if: always()
