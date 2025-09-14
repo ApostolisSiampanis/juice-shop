@@ -66,11 +66,6 @@ jobs:
                   snyk-results.json
                 retention-days: 7
 
-            - name: Upload SARIF to code scanning
-              uses: github/codeql-action/upload-sarif@v3
-              with:
-                sarif_file: snyk-results.sarif
-
             - name: Clean up
               if: always()
               run: |
