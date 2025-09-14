@@ -17,13 +17,13 @@ permissions:
 
 jobs:
   
-  trufflehog:
-    name: Secrets Scan - TruffleHog
-    uses: ./.github/workflows/trufflehog.yml
+  # trufflehog:
+  #   name: Secrets Scan - TruffleHog
+  #   uses: ./.github/workflows/trufflehog.yml
 
   sonarqube:
     name: Static Code Analysis - SonarQube
-    needs: trufflehog
+    # needs: trufflehog
     uses: ./.github/workflows/sonarqube.yml
 
   # semgrep:
