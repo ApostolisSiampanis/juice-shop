@@ -45,8 +45,3 @@
 - **Allowed ports**: `3000` by default (configurable in the Nmap workflow call).
 - **Artifacts**: CI writes `scan/nmap_open_ports.txt` and `scan/nmap_open_ports.xml`.
 - **Enforcement**: CI step parses `nmap_open_ports.txt` and fails if unexpected open ports are found.
-
-## Tips
-
-- **Branch Protection**: Require CI checks to pass on `main` to block insecure merges.
-- **Speed**: Run heavy DAST locally only when needed; hooks run quick checks before CI.
