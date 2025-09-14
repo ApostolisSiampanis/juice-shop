@@ -36,11 +36,12 @@ jobs:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
   nmap_compose_scan:
-    name: Network Scan – Nmap via Docker Compose
     uses: ./.github/workflows/nmap.yml
     with:
       compose_file: docker-compose.test.yml
       compose_project_name: juice-shop-ci
       service_names: app
-      ports: "1-65535"
-      extra_nmap_args: "-sT -T4 -n --open -Pn"
+      ports: "-p-"
+      extra_nmap_args: >
+        -sT -sV --version-all -sC -n -Pn --open --reason -T4
+        --script "default,banner,http-title,http-headers,http-methods,http-server-header,http-enum,ssl-enum-ciphers"
