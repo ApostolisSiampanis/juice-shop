@@ -59,8 +59,11 @@ jobs:
                 path: |
                   snyk-results.sarif
                   snyk-results.json
+                retention-days: 7
 
             - name: Clean up
               if: always()
               run: |
+                docker stop snyk || true
+                docker rm snyk || true
                 docker image rm snyk/snyk:docker || true

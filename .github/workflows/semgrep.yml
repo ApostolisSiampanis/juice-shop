@@ -52,4 +52,6 @@ jobs:
           - name: Clean up
             if: always()
             run: |
+              docker stop semgrep || true
+              docker rm semgrep || true
               docker image rm semgrep/semgrep:latest || true
