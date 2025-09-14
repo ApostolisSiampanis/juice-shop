@@ -41,6 +41,6 @@ jobs:
     with:
       compose_file: docker-compose.test.yml
       compose_project_name: juice-shop-ci
-      service_names: juice-shop
+      service_names: app
       ports: "1-65535"
       extra_nmap_args: "-sT -T4 -n --open -Pn"

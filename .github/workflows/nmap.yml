@@ -67,19 +67,47 @@ jobs:
         run: |
           set -euo pipefail
           NETWORK="${COMPOSE_PROJECT_NAME}_default"
-          TARGETS="${{ inputs.service_names }}"
+          TARGETS_RAW="${{ inputs.service_names }}"
           PORTS="${{ inputs.ports }}"
 
           mkdir -p scan
-          chmod 777 scan   # ensure any UID inside the container can write
+          chmod 777 scan
 
-          # Build port args safely (-p once only)
-          if [[ "$PORTS" == -p* ]]; then
-            PORT_ARGS="$PORTS"
-          else
-            PORT_ARGS="-p $PORTS"
+          # Build port args (-p once)
+          if [[ "$PORTS" == -p* ]]; then PORT_ARGS="$PORTS"; else PORT_ARGS="-p $PORTS"; fi
+
+          # Split targets
+          IFS=', ' read -r -a TARGET_LIST <<< "$TARGETS_RAW"
+
+          # Wait until names resolve on the network (up to ~60s total)
+          for s in "${TARGET_LIST[@]}"; do
+            [[ -z "$s" ]] && continue
+            for i in {1..30}; do
+              if docker run --rm --network "$NETWORK" local/nmap getent hosts "$s" >/dev/null 2>&1; then
+                break
+              fi
+              sleep 2
+            done
+          done
+
+          # Resolve to IPs (fallback via docker inspect)
+          RESOLVED_IPS=()
+          for s in "${TARGET_LIST[@]}"; do
+            [[ -z "$s" ]] && continue
+            ip="$(docker run --rm --network "$NETWORK" local/nmap getent hosts "$s" | awk '{print $1}' | head -n1 || true)"
+            if [[ -z "$ip" ]]; then
+              cid="$(docker compose -p "${COMPOSE_PROJECT_NAME}" ps -q "$s" || true)"
+              [[ -n "$cid" ]] && ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$cid" || true)"
+            fi
+            [[ -n "$ip" ]] && RESOLVED_IPS+=("$ip") || echo "WARNING: Could not resolve '$s'"
+          done
+
+          if [[ ${#RESOLVED_IPS[@]} -eq 0 ]]; then
+            echo "ERROR: No targets resolved; aborting scan."
+            exit 1
           fi
 
+          echo "Scanning: ${RESOLVED_IPS[*]} on $NETWORK"
           docker run --rm \
             --network "$NETWORK" \
             -v "$PWD/scan:/out" \
@@ -87,7 +115,7 @@ jobs:
             local/nmap \
               ${{ inputs.extra_nmap_args }} \
               $PORT_ARGS \
-              $TARGETS \
+              "${RESOLVED_IPS[@]}" \
               -oN /out/nmap_open_ports.txt \
               -oX /out/nmap_open_ports.xml
 
