@@ -57,13 +57,13 @@ jobs:
                   -t ghcr.io/zaproxy/zaproxy:stable \
                   zap-baseline.py \
                   -t http://localhost:3000 \
-                  -g /zap/wrk/gen.conf \
-                  -J /zap/wrk/zap_report.json \
                   -z "replacer.full_list(0).description=AuthHeader" \
                   -z "replacer.full_list(0).matchType=REQUEST_HEADER" \
                   -z "replacer.full_list(0).matchRegex=false" \
                   -z "replacer.full_list(0).replace=\"Authorization: Bearer $TOKEN\"" \
                   -z "replacer.full_list(0).enabled=true" \
+                  -g /zap/wrk/gen.conf \
+                  -J /zap/wrk/zap_report.json \
                   -I \
                   -T 10 \
                   -d || true
