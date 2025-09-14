@@ -41,7 +41,7 @@ jobs:
       compose_file: docker-compose.test.yml
       compose_project_name: juice-shop-ci
       service_names: app
-      ports: "-p-"
+      ports: 1-65535
       extra_nmap_args: >
         -sT -sV --version-all -sC -n -Pn --open --reason -T4
         --script "default,banner,http-title,http-headers,http-methods,http-server-header,http-enum,ssl-enum-ciphers"
