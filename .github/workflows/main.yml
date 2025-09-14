@@ -40,7 +40,7 @@ jobs:
     uses: ./.github/workflows/nmap.yml
     with:
       # Path to your compose file at repo root
-      compose_file: docker-compose.yml
+      compose_file: docker-compose.test.yml
       # Compose project name (helps isolate the network)
       compose_project_name: juice-shop-ci
       # Service names to scan inside the Compose network (comma-separated)
