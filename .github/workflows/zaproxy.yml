@@ -69,13 +69,6 @@ jobs:
             -T 10 \
             -d || true
 
-      - name: List zap-reports
-        if: always()
-        run: |
-          echo "Contents of zap-reports:"
-          ls -la zap-reports || echo "Directory zap-reports does not exist"
-          find zap-reports -type f -maxdepth 2 || echo "No files found under zap-reports"
-
       - name: Upload ZAP reports
         uses: actions/upload-artifact@v4
         with:
