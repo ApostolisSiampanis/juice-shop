@@ -61,7 +61,6 @@ jobs:
           echo "Compose status:"
           docker compose -p "${COMPOSE_PROJECT_NAME}" ps
 
-      # Run the Nmap container on the same Compose default network and scan the requested services
       - name: Run Nmap scan (inside Compose default network)
         env:
           COMPOSE_PROJECT_NAME: ${{ inputs.compose_project_name }}
@@ -70,21 +69,28 @@ jobs:
           NETWORK="${COMPOSE_PROJECT_NAME}_default"
           TARGETS="${{ inputs.service_names }}"
           PORTS="${{ inputs.ports }}"
-          
+
           mkdir -p scan
-          
-          # Use the Compose default network so service names (e.g., 'juice-shop') resolve via DNS.
-          # Output as human-readable text (-oN) and XML (-oX). Add -oJ as well if your Nmap supports JSON.
+          chmod 777 scan   # ensure any UID inside the container can write
+
+          # Build port args safely (-p once only)
+          if [[ "$PORTS" == -p* ]]; then
+            PORT_ARGS="$PORTS"
+          else
+            PORT_ARGS="-p $PORTS"
+          fi
+
           docker run --rm \
             --network "$NETWORK" \
             -v "$PWD/scan:/out" \
+            --user "$(id -u):$(id -g)" \
             local/nmap \
               ${{ inputs.extra_nmap_args }} \
-              -p "$PORTS" \
+              $PORT_ARGS \
               $TARGETS \
               -oN /out/nmap_open_ports.txt \
               -oX /out/nmap_open_ports.xml
-          
+
           echo "Scan files written to ./scan"
 
       - name: Upload scan results
