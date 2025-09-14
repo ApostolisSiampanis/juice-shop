@@ -34,3 +34,12 @@ jobs:
     uses: ./.github/workflows/snyk.yml
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  nmap_compose_scan:
+    uses: ./.github/workflows/nmap.yml
+    with:
+      compose_file: docker-compose.test.yml
+      compose_project_name: juice-shop-ci
+      service_names: app
+      ports: "1-65535"
+      extra_nmap_args: "-sT -T4 -n --open -Pn"
