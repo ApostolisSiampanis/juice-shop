@@ -25,29 +25,29 @@ jobs:
 
   sonarqube:
     name: Static Code Analysis - SonarQube
-    needs: trufflehog
+    # needs: trufflehog
     uses: ./.github/workflows/sonarqube.yml
 
   semgrep:
     name: Static Code Analysis - Semgrep
-    needs: sonarqube
+    # needs: sonarqube
     uses: ./.github/workflows/semgrep.yml
 
   snyk:
     name: Static Code Security Analysis - Snyk
-    needs: semgrep
+    # needs: semgrep
     uses: ./.github/workflows/snyk.yml
     secrets:
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
   zap-baseline:
     name: Dynamic Application Security Testing - ZAP
-    needs: snyk
+    # needs: snyk
     uses: ./.github/workflows/zaproxy.yml
 
   nmap:
     name: Network Scan - Nmap
-    needs: zap-baseline
+    # needs: zap-baseline
     uses: ./.github/workflows/nmap.yml
     with:
       compose_file: docker-compose.test.yml
