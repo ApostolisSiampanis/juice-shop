@@ -30,32 +30,27 @@ jobs:
                 --json --output=/src/semgrep-results.json \
                 --verbose
 
-              - name: Semgrep results
-                run: |
-                  echo "Semgrep summary:"
-                  if [ -f semgrep-results.json ]; then
-                      jq -r '
-                        .results[] |
-                        "[\(.check_id)] [\(.extra.severity)] \(.path):\(.start.line) - \(.extra.message)"
-                      ' semgrep-results.json || cat semgrep-results.json
-                  else
-                      echo "No semgrep-results.json found"
-                  fi
+          - name: Semgrep results
+            run: |
+              echo "Semgrep summary:"
+              if [ -f semgrep-results.json ]; then
+                  jq -r '
+                    .results[] |
+                    "[\(.check_id)] [\(.extra.severity)] \(.path):\(.start.line) - \(.extra.message)"
+                  ' semgrep-results.json || cat semgrep-results.json
+              else
+                  echo "No semgrep-results.json found"
+              fi
 
           - name: Upload scan results
-            uses: actions/upload-artifact@v3
+            uses: actions/upload-artifact@v4
             with:
               name: semgrep-results
               path: |
                 semgrep-results.json
                 semgrep-results.sarif
               retention-days: 7
-
-          - name: Upload SARIF to code scanning
-            uses: github/codeql-action/upload-sarif@v4
-            with:
-              sarif_file: semgrep-results.sarif
-                  
+                      
           - name: Clean up
             if: always()
             run: |
