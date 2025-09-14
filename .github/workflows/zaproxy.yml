@@ -8,70 +8,79 @@ permissions:
   security-events: write
 
 jobs:
-    zap-dast-full-scan:
-        runs-on: ubuntu-latest
+  zap-dast-full-scan:
+    runs-on: ubuntu-latest
 
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            - name: Build the Docker Image
-              run: docker build . -f Dockerfile -t juice-shop:latest
+      - name: Build the Docker Image
+        run: docker build . -f Dockerfile -t juice-shop:latest
 
-            - name: Start Application (Juice Shop)
-              run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
+      - name: Start Application (Juice Shop)
+        run: docker run -d -p 3000:3000 --name juice-shop juice-shop:latest
 
-            - name: Wait for application to be ready
-              run: |
-                for i in {1..30}; do
-                  if curl --silent --fail http://localhost:3000 >/dev/null 2>&1; then
-                    echo "App is up"
-                    break
-                  fi
-                  echo "Waiting for app... ($i/30)"
-                  sleep 5
-                done
+      - name: Wait for application to be ready
+        run: |
+          for i in {1..30}; do
+            if curl --silent --fail http://localhost:3000 >/dev/null 2>&1; then
+              echo "App is up"
+              break
+            fi
+            echo "Waiting for app... ($i/30)"
+            sleep 5
+          done
 
-            - name: Login to Juice Shop to get Bearer Token
-              id: login
-              run: |
-                RESPONSE=$(curl -s -X POST http://localhost:3000/rest/user/login \
-                  -H "Content-Type: application/json" \
-                  -d '{"email":"admin@juice-sh.op","password":"admin123"}')
-                TOKEN=$(echo "$RESPONSE" | jq -r .authentication.token)
-                if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-                  echo "Failed to get auth token"
-                  exit 1
-                fi
-                echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+      - name: Login to Juice Shop to get Bearer Token
+        id: login
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:3000/rest/user/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@juice-sh.op","password":"admin123"}')
+          TOKEN=$(echo "$RESPONSE" | jq -r .authentication.token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to get auth token"
+            exit 1
+          fi
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
 
 
-            - name: Run ZAP Baseline Scan with Auth Header
-              run: |
-                mkdir -p zap-reports
-                chmod 777 zap-reports
-                docker run --rm \
-                  -u 1000:1000 \
-                  -v "${{ github.workspace }}/zap-reports:/zap/wrk/:rw" \
-                  --network="host" \
-                  -t ghcr.io/zaproxy/zaproxy:stable \
-                  zap-baseline.py \
-                  -t http://localhost:3000 \
-                  -z "replacer.full_list(0).description=AuthHeader" \
-                  -z "replacer.full_list(0).matchType=REQUEST_HEADER" \
-                  -z "replacer.full_list(0).matchRegex=false" \
-                  -z "replacer.full_list(0).replace=\"Authorization: Bearer $TOKEN\"" \
-                  -z "replacer.full_list(0).enabled=true" \
-                  -g /zap/wrk/gen.conf \
-                  -J /zap/wrk/zap_report.json \
-                  -I \
-                  -T 10 \
-                  -d || true
+      - name: Run ZAP Baseline Scan with Auth Header
+        run: |
+          mkdir -p zap-reports
+          chmod 777 zap-reports
+          docker run --rm \
+            -u 1000:1000 \
+            -v "${{ github.workspace }}/zap-reports:/zap/wrk/:rw" \
+            --network="host" \
+            -t ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://localhost:3000 \
+            -z "replacer.full_list(0).description=AuthHeader" \
+            -z "replacer.full_list(0).matchType=REQUEST_HEADER" \
+            -z "replacer.full_list(0).matchRegex=false" \
+            -z "replacer.full_list(0).replace=\"Authorization: Bearer $TOKEN\"" \
+            -z "replacer.full_list(0).enabled=true" \
+            -g /zap/wrk/gen.conf \
+            -r /zap/wrk/zap-report.html \
+            -J /zap/wrk/zap-report.json \
+            -I \
+            -T 10 \
+            -d || true
 
-            - name: Upload ZAP reports
-              uses: actions/upload-artifact@v4
-              with:
-                name: zap-scan-reports
-                path: |
-                  zap_report.json
-                  gen.conf
+      - name: List zap-reports
+        if: always()
+        run: |
+          echo "Contents of zap-reports:"
+          ls -la zap-reports || echo "Directory zap-reports does not exist"
+          find zap-reports -type f -maxdepth 2 || echo "No files found under zap-reports"
+
+      - name: Upload ZAP reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-scan-reports
+          path: |
+            zap-report.html
+            zap-report.json
+            gen.conf
