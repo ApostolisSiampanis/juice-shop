@@ -44,8 +44,6 @@ jobs:
                     exit 1
                 fi
                 echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-            
-                  - name: Run SQLMap scan
 
             - name: Run SQLMap scan  
               run: |
