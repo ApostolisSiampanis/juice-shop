@@ -58,7 +58,7 @@ jobs:
 
   docker-publish:
     name: Publish Docker Image
-    needs: nmap
+    # needs: nmap
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docker-publish.yml
     secrets: inherit
