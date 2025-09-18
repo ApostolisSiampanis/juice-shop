@@ -16,42 +16,49 @@ permissions:
   id-token: write
 
 jobs:
-  # trufflehog:
-  #   name: Secrets Scan - TruffleHog
-  #   uses: ./.github/workflows/trufflehog.yml
-  #   with:
-  #     fail_on_any: true
+  trufflehog:
+    name: Secrets Scan - TruffleHog
+    uses: ./.github/workflows/trufflehog.yml
+    with:
+      fail_on_any: true
 
   sonarqube:
     name: Static Code Analysis - SonarQube
-    # needs: trufflehog
+    needs: trufflehog
     uses: ./.github/workflows/sonarqube.yml
 
-  # semgrep:
-  #   name: Static Code Analysis - Semgrep
-  #   needs: sonarqube
-  #   uses: ./.github/workflows/semgrep.yml
+  semgrep:
+    name: Static Code Analysis - Semgrep
+    needs: sonarqube
+    uses: ./.github/workflows/semgrep.yml
 
-  # snyk:
-  #   name: Static Code Security Analysis - Snyk
-  #   needs: semgrep
-  #   uses: ./.github/workflows/snyk.yml
-  #   secrets:
-  #     SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  snyk:
+    name: Static Code Security Analysis - Snyk
+    needs: semgrep
+    uses: ./.github/workflows/snyk.yml
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-  # zap-baseline:
-  #   name: Dynamic Application Security Testing - ZAP
-  #   needs: snyk
-  #   uses: ./.github/workflows/zaproxy.yml
+  zap-baseline:
+    name: Dynamic Application Security Testing - ZAP
+    needs: snyk
+    uses: ./.github/workflows/zaproxy.yml
 
-  # nmap:
-  #   name: Network Scan - Nmap
-  #   needs: zap-baseline
-  #   uses: ./.github/workflows/nmap.yml
-  #   with:
-  #     compose_file: docker-compose.test.yml
-  #     compose_project_name: juice-shop-ci
-  #     service_names: app
-  #     ports: "1-65535"
-  #     extra_nmap_args: "-sT -T4 -n --open -Pn"
-  #     allowed_ports: "3000"
+  nmap:
+    name: Network Scan - Nmap
+    needs: zap-baseline
+    uses: ./.github/workflows/nmap.yml
+    with:
+      compose_file: docker-compose.test.yml
+      compose_project_name: juice-shop-ci
+      service_names: app
+      ports: "1-65535"
+      extra_nmap_args: "-sT -T4 -n --open -Pn"
+      allowed_ports: "3000"
+
+  docker-publish:
+    name: Publish Docker Image
+    needs: nmap
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docker-publish.yml
+    secrets: inherit

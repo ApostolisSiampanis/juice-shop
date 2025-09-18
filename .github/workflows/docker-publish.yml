@@ -1,10 +1,17 @@
 name: Docker Publish
 
 on:
-  workflow_run:
-    workflows: ["CI/CD"]
-    types:
-      - completed
+  workflow_call:
+    inputs:
+      image_tag_prefix:
+        required: false
+        type: string
+        default: "1"
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 permissions:
   contents: read
@@ -13,16 +20,13 @@ permissions:
 
 jobs:
   publish:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     env:
       IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/juice-shop
-      IMAGE_TAG: 1.${{ github.run_number }}
+      IMAGE_TAG: ${{ inputs.image_tag_prefix }}.${{ github.run_number }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
