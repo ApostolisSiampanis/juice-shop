@@ -16,7 +16,6 @@ permissions:
   id-token: write
 
 jobs:
-  
   trufflehog:
     name: Secrets Scan - TruffleHog
     uses: ./.github/workflows/trufflehog.yml
@@ -56,3 +55,10 @@ jobs:
       ports: "1-65535"
       extra_nmap_args: "-sT -T4 -n --open -Pn"
       allowed_ports: "3000"
+
+  docker-publish:
+    name: Publish Docker Image
+    needs: nmap
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/docker-publish.yml
+    secrets: inherit
